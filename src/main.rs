@@ -10,12 +10,5 @@ fn main() {
         .expect("Error loading djot grammer");
     let source_code = "_This is regular_ not strong emphasis\n*strong*\n";
     let mut tree = parser.parse(source_code, None).unwrap();
-    unsafe {
-        let cstr = CStr::from_ptr(ts_node_string(tree.root_node().into_raw()));
-        println!(
-            "{}",
-            String::from_utf8_lossy(cstr.to_bytes()).to_string()
-        );
-    }
-    // println!("Hello, world!");
+    println!("{}", tree.root_node().to_sexp());
 }
