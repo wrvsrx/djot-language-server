@@ -87,7 +87,6 @@ content
 # Heading 3
 #    continue
 ";
-        let source_code = std::fs::read_to_string("docs/plan.dj").unwrap();
         let text = ropey::Rope::from_str(&source_code);
         let mut parser = tree_sitter::Parser::new();
         parser
@@ -218,6 +217,6 @@ content
                 children: None,
             },
         ];
-        // assert_eq!(symbols, a);
+        assert_eq!(symbols, a);
     }
 }
