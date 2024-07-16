@@ -1,0 +1,44 @@
+``` yaml
+title: plan
+```
+
+# Features
+
+- [ ] document symbols
+  
+  - [ ] headings
+  - [ ] anchor?
+  - [ ] list?
+
+- [ ] jump to definition
+
+  - [ ] jump to link in the same file
+  - [ ] jump to link in another file
+
+- [ ] diagnostic
+- [ ] backward reference
+- [ ] completion
+  
+  - [ ] links
+  - [ ] paths
+
+- [ ] formatter?
+
+
+# Fix
+
+- [ ] tree-sitter-djot wrongly parse heading into list
+
+
+# Plan
+
+## jump to links
+
+1. maintain a map from node to links
+1. when need to jump, use the map to determine the link under the cursor
+1. jump
+
+
+## how to maintain links (and ast) on both active and inactive files
+
+- [ ] think about that
