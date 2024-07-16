@@ -1,10 +1,6 @@
-use std::borrow::Borrow;
-use std::fs;
-use std::process::exit;
-
 use dashmap::DashMap;
-use jotdown::Event;
 use ropey::Rope;
+use std::borrow::Borrow;
 use tokio;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
@@ -156,7 +152,8 @@ fn find_document_heading(node: Node, text: &Rope) -> Option<DocumentSymbol> {
                     jotdown::Event::Softbreak => Some(" "),
                     _ => None,
                 }
-            }).collect();
+            })
+            .collect();
 
         let mut cursor = node.walk();
         let b: Vec<DocumentSymbol> = match node.child(1) {
@@ -178,16 +175,19 @@ fn find_document_heading(node: Node, text: &Rope) -> Option<DocumentSymbol> {
                 },
             };
         };
-        Some(DocumentSymbol {
-            name: heading_str,
-            detail: None,
-            kind: SymbolKind::NAMESPACE,
-            tags: None,
-            deprecated: None,
-            range: r2r(node.range()),
-            selection_range: r2r(first_child.range()),
-            children: if b.len() > 0 { Some(b) } else { None },
-        })
+        Some(
+            #[allow(deprecated)]
+            DocumentSymbol {
+                name: heading_str,
+                detail: None,
+                kind: SymbolKind::NAMESPACE,
+                tags: None,
+                deprecated: None,
+                range: r2r(node.range()),
+                selection_range: r2r(first_child.range()),
+                children: if b.len() > 0 { Some(b) } else { None },
+            },
+        )
     } else {
         None
     }
