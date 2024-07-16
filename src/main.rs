@@ -7,6 +7,8 @@ use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 use tree_sitter::{Node, Parser, Tree};
 
+mod utils;
+
 #[derive(Debug)]
 struct Backend {
     client: Client,
@@ -163,18 +165,6 @@ fn find_document_heading(node: Node, text: &Rope) -> Option<DocumentSymbol> {
                 .collect(),
             None => vec![],
         };
-        let r2r = |range: tree_sitter::Range| -> Range {
-            return Range {
-                start: Position {
-                    line: range.start_point.row as u32,
-                    character: range.start_point.column as u32,
-                },
-                end: Position {
-                    line: range.end_point.row as u32,
-                    character: range.end_point.column as u32,
-                },
-            };
-        };
         Some(
             #[allow(deprecated)]
             DocumentSymbol {
@@ -183,8 +173,8 @@ fn find_document_heading(node: Node, text: &Rope) -> Option<DocumentSymbol> {
                 kind: SymbolKind::NAMESPACE,
                 tags: None,
                 deprecated: None,
-                range: r2r(node.range()),
-                selection_range: r2r(first_child.range()),
+                range: utils::treesitter_range_to_lsp_range(node.range()),
+                selection_range: utils::treesitter_range_to_lsp_range(first_child.range()),
                 children: if b.len() > 0 { Some(b) } else { None },
             },
         )
