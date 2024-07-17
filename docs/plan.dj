@@ -6,7 +6,7 @@ title: plan
 
 - [ ] document symbols
   
-  - [ ] headings
+  - [x] headings
   - [ ] anchor?
   - [ ] list?
 
@@ -24,11 +24,9 @@ title: plan
 
 - [ ] formatter?
 
-
 # Fix
 
-- [ ] tree-sitter-djot wrongly parse heading into list
-
+- [x] tree-sitter-djot wrongly parse heading into list
 
 # Plan
 
@@ -37,7 +35,6 @@ title: plan
 1. maintain a map from node to links
 1. when need to jump, use the map to determine the link under the cursor
 1. jump
-
 
 ## how to maintain links (and ast) on both active and inactive files
 
