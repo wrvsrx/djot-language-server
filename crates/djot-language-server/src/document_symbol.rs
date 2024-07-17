@@ -70,7 +70,7 @@ mod tests {
     use tower_lsp::lsp_types::*;
 
     #[test]
-    fn document_symbol() {
+    fn basic() {
         let source_code = "# Heading
 
 something
@@ -211,6 +211,59 @@ content
                     },
                     end: Position {
                         line: 15,
+                        character: 0,
+                    },
+                },
+                children: None,
+            },
+        ];
+        assert_eq!(symbols, a);
+    }
+    #[test]
+    fn heading_after_list() {
+        let source_code = "- list
+
+## Heading
+";
+        let text = ropey::Rope::from_str(&source_code);
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_djot::language())
+            .expect("Error loading djot grammer");
+        let tree = parser.parse(&source_code, None).unwrap();
+        let mut cursor = tree.root_node().walk();
+        let symbols = tree
+            .root_node()
+            .children(&mut cursor)
+            .filter_map(|child| find_document_heading(child, &text))
+            .collect::<Vec<_>>();
+        println!("{:?}", tree.root_node().to_sexp());
+        println!("{:?}", symbols);
+        let a = [
+            #[allow(deprecated)]
+            DocumentSymbol {
+                name: "Heading".to_string(),
+                detail: None,
+                kind: SymbolKind::NAMESPACE,
+                tags: None,
+                deprecated: None,
+                range: Range {
+                    start: Position {
+                        line: 2,
+                        character: 0,
+                    },
+                    end: Position {
+                        line: 3,
+                        character: 0,
+                    },
+                },
+                selection_range: Range {
+                    start: Position {
+                        line: 2,
+                        character: 0,
+                    },
+                    end: Position {
+                        line: 3,
                         character: 0,
                     },
                 },
