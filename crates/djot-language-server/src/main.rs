@@ -58,8 +58,6 @@ impl LanguageServer for Backend {
     async fn initialize(&self, _: InitializeParams) -> Result<InitializeResult> {
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
-                hover_provider: Some(HoverProviderCapability::Simple(true)),
-                completion_provider: Some(CompletionOptions::default()),
                 document_symbol_provider: Some(OneOf::Left(true)),
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
                     TextDocumentSyncKind::FULL,
@@ -103,20 +101,6 @@ impl LanguageServer for Backend {
 
     async fn shutdown(&self) -> Result<()> {
         Ok(())
-    }
-
-    async fn completion(&self, _: CompletionParams) -> Result<Option<CompletionResponse>> {
-        Ok(Some(CompletionResponse::Array(vec![
-            CompletionItem::new_simple("Hello".to_string(), "Some detail".to_string()),
-            CompletionItem::new_simple("Bye".to_string(), "More detail".to_string()),
-        ])))
-    }
-
-    async fn hover(&self, _: HoverParams) -> Result<Option<Hover>> {
-        Ok(Some(Hover {
-            contents: HoverContents::Scalar(MarkedString::String("You're hovering!".to_string())),
-            range: None,
-        }))
     }
 }
 
