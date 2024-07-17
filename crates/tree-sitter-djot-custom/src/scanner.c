@@ -40,9 +40,9 @@ bool tree_sitter_djot_external_scanner_scan(void *payload, TSLexer *lexer,
   // - paragraph_end
 
   if (lexer->get_column(lexer) == 0) {
-    // jump over leading spaces
+    // jump over leading spaces, treat them as ignored
     while (lexer->lookahead == ' ' || lexer->lookahead == '\t') {
-      lexer->advance(lexer, false);
+      lexer->advance(lexer, true);
     }
     // blankline has highest priority (if we don't consider code block or
     // verbatim)
