@@ -4,25 +4,25 @@ title: plan
 
 # Features
 
-- [ ] document symbols
+- [ ] `textDocument/documentSymbol`
   
   - [x] headings
   - [ ] anchor?
   - [ ] list?
 
-- [ ] jump to definition
+- [ ] `textDocument/definition`
 
   - [ ] jump to link in the same file
   - [ ] jump to link in another file
 
-- [ ] diagnostic
-- [ ] backward reference
-- [ ] completion
+- [ ] `textDocument/diagnostic`
+- [ ] `textDocument/completion`
   
   - [ ] links
   - [ ] paths
 
-- [ ] formatter?
+- [ ] `textDocument/formatting`?
+- [ ] backward reference
 
 # Fix
 
