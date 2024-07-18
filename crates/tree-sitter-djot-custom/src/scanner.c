@@ -23,6 +23,69 @@ enum TokenType {
   IGNORED,
 };
 
+// djot is not context free, we have to parse block structure by ourselves
+//
+// main idea: maintain a stack of open block-like elements, only parse two types
+// of tokens by hand
+// - block_like_start and block_like_end
+// - block_starting_marker and block_ending_marker
+// - softbreak
+//
+// Observation 1: block_starting_marker only occurs at line start (zero or more
+// times)
+// - heading_marker
+// - list_marker
+// - ...
+// Observation 2: block_ending_marker only occurs at line start (zero or more
+// times)
+// - code_block_end_marker
+// - verbatim_end_marker
+// - ...
+// Observation 3: block_like_end only occurs at line end (zero or more times)
+//
+// So we only need to parse token at line start and line end
+//
+// parse_line_end_eol:
+//   1. first_non_zero_token_after_eol : Token = f(block_stack, cursor)
+//   1. token : Token = f(block_stack, first_non_zero_token_after_eol)
+//   1. emit token
+//   1. go to parse_line_end_after_eol
+//
+// parse_line_end_after_eol:
+//   1. first_non_zero_token_after_cursor : Token = f(block_stack, cursor)
+//   1. emit_block_like_end : bool = f(block_stack, first_non_zero_token_after_cursor)
+//
+//      - if true
+//        1. pop block_stack
+//        1. emit block_like_end token
+//        1. goto parse_line_end_after_eol
+//      - if false, go to parse_line_start
+//
+// parse_line_start:
+//   1. first_non_zero_token_after_cursor : Token = f(block_stack, cursor)
+//   1. emit_block_like_start : bool = f(block_stack, first_non_zero_token_after_cursor)
+//
+//      - false
+//        
+//        1. emit ignored token
+//        2. goto parse_inline
+//
+//      - true
+//       
+//        1. open_block_data = f(block_stack, first_non_zero_token_after_cursor)
+//        1. push open_block_data to block_stack
+//        1. emit block_like_start token
+//        1. has_start_marker : bool = f(block_stack, first_non_zero_token_after_cursor)
+//        1. - true
+//             goto parse_starting_marker
+//           - false
+//             goto parse_inline
+//   
+// parse_starting_marker:
+//   1. first_non_zero_token_after_cursor : Token = f(block_stack, cursor)
+//   1. assert(first_non_zero_token_after_cursor is start_marker)
+//   1. goto parse_line_start
+
 enum BlockLikeType {
   PARAGRAPH,
   BLANKLINE,
