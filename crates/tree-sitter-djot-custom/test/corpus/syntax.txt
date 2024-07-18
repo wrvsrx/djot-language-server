@@ -8,10 +8,8 @@ aaa
 (document
   (block
     (paragraph
-      (paragraph_start)
       (inline
-        (str))
-      (paragraph_end))))
+        (str)))))
 
 ===============================================================================
 Paragraph: multiple paragraphs
@@ -25,18 +23,14 @@ bbb
 (document
   (block
     (paragraph
-      (paragraph_start)
       (inline
-        (str))
-      (paragraph_end)))
+        (str))))
   (block
     (blankline))
   (block
     (paragraph
-      (paragraph_start)
       (inline
-        (str))
-      (paragraph_end))))
+        (str)))))
 
 ===============================================================================
 Paragraph: multiple paragraphs with leading spaces
@@ -49,11 +43,9 @@ Paragraph: multiple paragraphs with leading spaces
 (document
   (block
     (paragraph
-      (paragraph_start)
       (inline
         (str))
       (inline
         (softbreak))
       (inline
-        (str))
-      (paragraph_end))))
+        (str)))))

@@ -1,28 +1,29 @@
 module.exports = grammar({
   name: "djot",
 
-  extras: (_) => ["\r"],
+  extras: ($) => ["\r", $._ignored,],
 
   rules: {
     document: ($) => repeat($.block),
 
-    // block must start with zero or more leading spaces
-    // block must end with '\n'
     block: ($) => choice($.paragraph, $.blankline),
 
-    paragraph: ($) => seq($.paragraph_start, repeat1($.inline), $.paragraph_end),
+    paragraph: ($) => seq($._block_like_start, repeat1($.inline), $._block_like_end),
+    blankline: ($) => seq($._block_like_start, $._block_like_end),
     inline: ($) => choice($.str, $.softbreak),
     str: (_) => /.+/,
-    paragraph_end: (_) => /\n/,
   },
 
   externals: ($) => [
     // block level
-    $.blankline,
-    $.paragraph_start,
-    $.paragraph_end,
+    // zero-length token
+    $._block_like_start,
+    // zero-length token or '\n'
+    $._block_like_end,
 
     // inline level
     $.softbreak,
+
+    $._ignored,
   ],
 });
