@@ -229,6 +229,68 @@ static bool parse_eol(struct ScannerState *s, TSLexer *lexer,
   return true;
 }
 
+static bool parse_block_like_start(struct ScannerState *s, TSLexer *lexer,
+                                   const bool *valid_symbols) {
+  assert(lexer->get_column(lexer) == 0);
+  consume_whitespace(lexer);
+  if (s->block_like_stack.size == 0) {
+    // if no block is open, search for block start
+    if (lexer->lookahead == '\n') {
+      struct BlockLike b = {.type = BLANKLINE, .metadata = {.blankline = {}}};
+      push_block_like(s, b);
+    } else if (lexer->lookahead == '#') {
+      // we just count for # number, don't consume them
+      lexer->mark_end(lexer);
+      uint8_t heading_level = count_heading_level(lexer);
+      struct BlockLike b = {.type = HEADING,
+                            .metadata = {.heading = heading_level}};
+      push_block_like(s, b);
+    } else {
+      struct BlockLike b = {.type = PARAGRAPH, .metadata = {.paragraph = {}}};
+      push_block_like(s, b);
+    }
+    assert(valid_symbols[BLOCK_LIKE_START]);
+    lexer->result_symbol = BLOCK_LIKE_START;
+  } else {
+    struct BlockLike t = *array_back(&(s->block_like_stack));
+    if (t.type == PARAGRAPH) {
+      // if current block is paragraph, continue parsing
+      assert(valid_symbols[IGNORED]);
+      lexer->result_symbol = IGNORED;
+    } else if (t.type == BLANKLINE) {
+      // if current block is blankline, it's impossible
+      assert(false);
+    } else if (t.type == HEADING) {
+      assert(valid_symbols[IGNORED]);
+      lexer->result_symbol = IGNORED;
+    } else {
+      assert(false);
+    }
+  }
+  return true;
+}
+
+static bool parse_starting_maker(struct ScannerState *s, TSLexer *lexer,
+                                 const bool *valid_symbols) {
+  assert(s->block_like_stack.size > 0);
+  struct BlockLike t = *array_back(&(s->block_like_stack));
+  if (t.type == HEADING && lexer->lookahead == '#') {
+    // if current block is heading, there is two possible cases
+    // 1. it's a heading marker
+    // 2. it's simple continuation
+    // we just need to handle the first case, the latter can be handled by
+    // default scanner
+    uint8_t heading_level = count_heading_level(lexer);
+    assert(heading_level == t.metadata.heading);
+    assert(valid_symbols[HEADING_MARKER]);
+    lexer->result_symbol = HEADING_MARKER;
+  } else {
+    assert(valid_symbols[IGNORED]);
+    lexer->result_symbol = IGNORED;
+  }
+  return true;
+}
+
 bool tree_sitter_djot_external_scanner_scan(void *payload, TSLexer *lexer,
                                             const bool *valid_symbols) {
   struct ScannerState *s = payload;
@@ -241,61 +303,11 @@ bool tree_sitter_djot_external_scanner_scan(void *payload, TSLexer *lexer,
   }
 
   if (s->line_parsing_state == NOT_PARSING_BLOCK_LIKE_START) {
-    assert(lexer->get_column(lexer) == 0);
-    consume_whitespace(lexer);
-    if (s->block_like_stack.size == 0) {
-      // if no block is open, search for block start
-      if (lexer->lookahead == '\n') {
-        struct BlockLike b = {.type = BLANKLINE, .metadata = {.blankline = {}}};
-        push_block_like(s, b);
-      } else if (lexer->lookahead == '#') {
-        // we just count for # number, don't consume them
-        lexer->mark_end(lexer);
-        uint8_t heading_level = count_heading_level(lexer);
-        struct BlockLike b = {.type = HEADING,
-                              .metadata = {.heading = heading_level}};
-        push_block_like(s, b);
-      } else {
-        struct BlockLike b = {.type = PARAGRAPH, .metadata = {.paragraph = {}}};
-        push_block_like(s, b);
-      }
-      assert(valid_symbols[BLOCK_LIKE_START]);
-      lexer->result_symbol = BLOCK_LIKE_START;
-    } else {
-      struct BlockLike t = *array_back(&(s->block_like_stack));
-      if (t.type == PARAGRAPH) {
-        // if current block is paragraph, continue parsing
-        assert(valid_symbols[IGNORED]);
-        lexer->result_symbol = IGNORED;
-      } else if (t.type == BLANKLINE) {
-        // if current block is blankline, it's impossible
-        assert(false);
-      } else if (t.type == HEADING) {
-        assert(valid_symbols[IGNORED]);
-        lexer->result_symbol = IGNORED;
-      } else {
-        assert(false);
-      }
-    }
+    assert(parse_block_like_start(s, lexer, valid_symbols));
     s->line_parsing_state = NOT_PARSING_STARTING_MARKER;
     return true;
   } else if (s->line_parsing_state == NOT_PARSING_STARTING_MARKER) {
-    assert(s->block_like_stack.size > 0);
-    struct BlockLike t = *array_back(&(s->block_like_stack));
-    if (t.type == HEADING && lexer->lookahead == '#') {
-      // if current block is heading, there is two possible cases
-      // 1. it's a heading marker
-      // 2. it's simple continuation
-      // we just need to handle the first case, the latter can be handled by
-      // default scanner
-      uint8_t heading_level = count_heading_level(lexer);
-      assert(heading_level == t.metadata.heading);
-      assert(valid_symbols[HEADING_MARKER]);
-      lexer->result_symbol = HEADING_MARKER;
-    } else {
-      assert(valid_symbols[IGNORED]);
-      lexer->result_symbol = IGNORED;
-    }
+    assert(parse_starting_maker(s, lexer, valid_symbols));
     s->line_parsing_state = NOT_PARSING_IGNORED_AFTER_STARTING_MARKER;
     return true;
   } else if (s->line_parsing_state ==
@@ -306,9 +318,6 @@ bool tree_sitter_djot_external_scanner_scan(void *payload, TSLexer *lexer,
     s->line_parsing_state = OTHERWISE;
     return true;
   } else if (s->line_parsing_state == OTHERWISE) {
-#ifdef TREE_SITTER_DEBUG
-    printf("--- counter %c\n", lexer->lookahead);
-#endif
     if (lexer->lookahead == '\n') {
       // if it isn't start or start has been parsed
       assert(parse_eol(s, lexer, valid_symbols));
