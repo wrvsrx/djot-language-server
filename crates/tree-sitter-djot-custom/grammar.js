@@ -4,8 +4,10 @@ module.exports = grammar({
   extras: ($) => ["\r", $._ignored,],
 
   rules: {
-    document: ($) => repeat($.block),
+    document: ($) => repeat($._section_or_block),
 
+    _section_or_block: ($) => choice($.section, $.block),
+    section: ($) => seq($._block_like_start, $.heading, repeat($._section_or_block), $._block_like_end),
     block: ($) => choice($.paragraph, $.blankline, $.heading),
 
     paragraph: ($) => seq($._block_like_start, repeat1($.inline), $._block_like_end),
@@ -13,6 +15,7 @@ module.exports = grammar({
     heading: ($) => seq($._block_like_start, repeat1(seq($.heading_marker, repeat($.inline))), $._block_like_end),
     inline: ($) => choice($.str, $.softbreak),
     str: (_) => /.+/,
+    _block_like_end: ($) => choice($._block_like_end_eol, $._block_like_end_zero_length)
   },
 
   externals: ($) => [
@@ -20,7 +23,8 @@ module.exports = grammar({
     // zero-length token
     $._block_like_start,
     // zero-length token or '\n'
-    $._block_like_end,
+    $._block_like_end_eol,
+    $._block_like_end_zero_length,
 
     // block leading
     $.heading_marker,

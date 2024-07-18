@@ -58,7 +58,7 @@ Heading: simple
 -------------------------------------------------------------------------------
 
 (document
-  (block
+  (section
     (heading
       (heading_marker)
       (inline
@@ -74,14 +74,14 @@ Heading: multiple headings
 -------------------------------------------------------------------------------
 
 (document
-  (block
+  (section
     (heading
       (heading_marker)
       (inline
-        (str))))
-  (block
-    (blankline))
-  (block
+        (str)))
+    (block
+      (blankline)))
+  (section
     (heading
       (heading_marker)
       (inline
@@ -96,7 +96,7 @@ Heading: multiline headings using softbreak
 -------------------------------------------------------------------------------
 
 (document
-  (block
+  (section
     (heading
       (heading_marker)
       (inline
@@ -115,7 +115,7 @@ Heading: multiline headings using markers
 -------------------------------------------------------------------------------
 
 (document
-  (block
+  (section
     (heading
       (heading_marker)
       (inline
@@ -136,7 +136,7 @@ Heading: multiline headings using softbreak and markers
 -------------------------------------------------------------------------------
 
 (document
-  (block
+  (section
     (heading
       (heading_marker)
       (inline
@@ -159,9 +159,36 @@ Heading: simple with hash as content
 -------------------------------------------------------------------------------
 
 (document
-  (block
+  (section
     (heading
       (heading_marker)
+      (inline
+        (str)))))
+
+===============================================================================
+Heading: a long long marker
+===============================================================================
+################### a
+
+-------------------------------------------------------------------------------
+
+(document
+  (section
+    (heading
+      (heading_marker)
+      (inline
+        (str)))))
+
+===============================================================================
+Heading: non-heading without spaces
+===============================================================================
+###################a
+
+-------------------------------------------------------------------------------
+
+(document
+  (block
+    (paragraph
       (inline
         (str)))))
 
@@ -174,7 +201,7 @@ Heading: multiline heading with hash as content
 -------------------------------------------------------------------------------
 
 (document
-  (block
+  (section
     (heading
       (heading_marker)
       (inline
@@ -184,3 +211,126 @@ Heading: multiline heading with hash as content
       (heading_marker)
       (inline
         (str)))))
+
+===============================================================================
+Heading: Empty heading
+===============================================================================
+#
+
+-------------------------------------------------------------------------------
+
+(document
+  (section
+    (heading
+      (heading_marker))))
+
+===============================================================================
+Section: Nested section
+===============================================================================
+# a
+
+## a
+
+-------------------------------------------------------------------------------
+
+(document
+  (section
+    (heading
+      (heading_marker)
+      (inline
+        (str)))
+    (block
+      (blankline))
+    (section
+      (heading
+        (heading_marker)
+        (inline
+          (str))))))
+
+===============================================================================
+Section: Nested section without blankline
+===============================================================================
+# a
+## a
+
+-------------------------------------------------------------------------------
+
+(document
+  (section
+    (heading
+      (heading_marker)
+      (inline
+        (str)))
+    (section
+      (heading
+        (heading_marker)
+        (inline
+          (str))))))
+
+===============================================================================
+Section: Nested section with empty heading
+===============================================================================
+#
+## a
+
+-------------------------------------------------------------------------------
+
+(document
+  (section
+    (heading
+      (heading_marker))
+    (section
+      (heading
+        (heading_marker)
+        (inline
+          (str))))))
+
+===============================================================================
+Section: Multiple nested sections
+===============================================================================
+# a
+
+## a
+
+# b
+
+## bb
+
+### bbb
+
+-------------------------------------------------------------------------------
+
+(document
+  (section
+    (heading
+      (heading_marker)
+      (inline
+        (str)))
+    (block
+      (blankline))
+    (section
+      (heading
+        (heading_marker)
+        (inline
+          (str)))
+      (block
+        (blankline))))
+  (section
+    (heading
+      (heading_marker)
+      (inline
+        (str)))
+    (block
+      (blankline))
+    (section
+      (heading
+        (heading_marker)
+        (inline
+          (str)))
+      (block
+        (blankline))
+      (section
+        (heading
+          (heading_marker)
+          (inline
+            (str)))))))
