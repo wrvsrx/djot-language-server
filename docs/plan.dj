@@ -21,6 +21,8 @@ title: plan
   - [ ] links
   - [ ] paths
 
+- [ ] `textDocument/semanticToken/full`
+- [ ] `textDocument/semanticToken/range`?
 - [ ] `textDocument/formatting`?
 - [ ] backward reference
 
