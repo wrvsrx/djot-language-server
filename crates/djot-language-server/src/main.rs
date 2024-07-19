@@ -10,26 +10,32 @@ mod ast;
 mod document_symbol;
 mod utils;
 
+#[derive(Debug, Clone)]
+struct ParsedDoc {
+    doc: Rope,
+    ast: Vec<ast::Node>,
+}
+
 #[derive(Debug)]
 struct Backend {
     client: Client,
-    doc_and_ast_map: DashMap<String, (Rope, Vec<ast::Node>)>,
+    parsed_doc_map: DashMap<String, ParsedDoc>,
 }
 
 impl Backend {
     async fn on_change(&self, params: TextDocumentItem) {
-        let rope = ropey::Rope::from_str(&params.text);
+        let doc = ropey::Rope::from_str(&params.text);
 
         let mut events = jotdown::Parser::new(&params.text).into_offset_iter();
-        let nodes = {
+        let ast = {
             let mut res = Vec::new();
             while let Some(offset_e) = events.next() {
                 res.push(ast::Node::new(&offset_e, &mut events));
             }
             res
         };
-        self.doc_and_ast_map
-            .insert(params.uri.to_string(), (rope, nodes));
+        self.parsed_doc_map
+            .insert(params.uri.to_string(), ParsedDoc { doc, ast });
     }
 }
 
@@ -76,15 +82,15 @@ impl LanguageServer for Backend {
         params: DocumentSymbolParams,
     ) -> Result<Option<DocumentSymbolResponse>> {
         self.client
-            .log_message(MessageType::INFO, format!("{:?}", self.doc_and_ast_map))
+            .log_message(MessageType::INFO, format!("{:?}", self.parsed_doc_map))
             .await;
 
         let tns = self
-            .doc_and_ast_map
+            .parsed_doc_map
             .get(&params.text_document.uri.to_string())
             .unwrap();
-        let text = &tns.0;
-        let nodes = &tns.1;
+        let text = &tns.doc;
+        let nodes = &tns.ast;
         let symbols: Vec<DocumentSymbol> = nodes
             .into_iter()
             .filter_map(|child| document_symbol::find_document_heading(text, child))
@@ -110,7 +116,7 @@ async fn main() {
 
     let (service, socket) = LspService::new(|client| Backend {
         client,
-        doc_and_ast_map: DashMap::new(),
+        parsed_doc_map: DashMap::new(),
     });
     Server::new(stdin, stdout, socket).serve(service).await;
 }
