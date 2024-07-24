@@ -43,12 +43,11 @@ parseBlock state cursor = do
   return ()
 
 parseInline state cursor = do
-  ...
+  if at_eol then stop else parseInline'
 
 parse state cursor = do
   if remain_token then pop_token else return ()
   if at_start then parseBlock
-  else if at_eol then skip it
   else parseInline
 ```
 
@@ -68,18 +67,5 @@ Q: Can we parse it adhoc?
 A: No, such as verbatim and emphasis we can't determine if it ends at eol.
 A: When we meet eol, we maintain the inline stack
 
-we have a two stacks, block stack and inline stack.
+Since we can't backtracking, we need to parse it at once.
 
-parse block and inline alternatively.
-
-1. at block beginning, determine
-
-   - push something into block stack one times
-   - push something into inline stack and change into inline parsing
-
-1. at inline begging, determine
-
-   - extend current inline token
-   - push into inline stack
-   - change previous inline stack
-   - pop from inline stack

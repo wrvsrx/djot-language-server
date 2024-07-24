@@ -1,35 +1,36 @@
 module.exports = grammar({
   name: "djot",
 
-  extras: ($) => ["\r", $._ignored,],
+  extras: ($) => [$._ignored],
 
   rules: {
-    document: ($) => repeat($._section_or_block),
+    document: ($) => repeat($.block),
 
-    _section_or_block: ($) => choice($.section, $.block),
-    section: ($) => seq($._block_like_start, $.heading, repeat($._section_or_block), $._block_like_end),
-    block: ($) => choice($.paragraph, $.blankline, $.heading),
+    block: ($) => choice($.section, $.heading, $.paragraph, $.blankline),
 
-    paragraph: ($) => seq($._block_like_start, repeat1($.inline), $._block_like_end),
-    blankline: ($) => seq($._block_like_start, $._block_like_end),
-    heading: ($) => seq($._block_like_start, repeat1(seq($.heading_marker, repeat($.inline))), $._block_like_end),
+    section: ($) => seq($._section_start, $.heading, repeat($.block), $._section_end),
+    heading: ($) => seq($._heading_start, $.heading_marker, repeat(choice($.heading_marker, $.inline)), $._heading_end),
+    paragraph: ($) => seq($._paragraph_start, repeat1($.inline), $._paragraph_end),
+    blankline: ($) => seq($._blankline_start, $._blankline_end),
+
     inline: ($) => choice($.str, $.softbreak),
-    str: (_) => /.+/,
-    _block_like_end: ($) => choice($._block_like_end_eol, $._block_like_end_zero_length)
   },
 
   externals: ($) => [
-    // block level
-    // zero-length token
-    $._block_like_start,
-    // zero-length token or '\n'
-    $._block_like_end_eol,
-    $._block_like_end_zero_length,
+    $._section_start,
+    $._section_end,
 
-    // block leading
+    $._heading_start,
     $.heading_marker,
+    $._heading_end,
 
-    // inline level
+    $._paragraph_start,
+    $._paragraph_end,
+
+    $._blankline_start,
+    $._blankline_end,
+
+    $.str,
     $.softbreak,
 
     $._ignored,
