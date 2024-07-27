@@ -78,6 +78,9 @@ static char const *block_name(enum BlockType type) {
   }
 }
 
+struct Inline {};
+typedef Array(struct Inline) InlineArray;
+
 struct Token {
   enum TokenType type;
   uint32_t length;
@@ -122,6 +125,7 @@ struct ScannerState {
   enum LineParserState line_parsing_state;
   // store all open blocks
   BlockArray block_array;
+  InlineArray potential_inlines;
   TokenArray remained_tokens;
 };
 
@@ -165,6 +169,7 @@ void *tree_sitter_djot_external_scanner_create(void) {
 void tree_sitter_djot_external_scanner_destroy(void *payload) {
   struct ScannerState *s = payload;
   array_delete(&(s->block_array));
+  array_delete(&(s->potential_inlines));
   array_delete(&(s->remained_tokens));
   ts_free(s);
 }
@@ -198,6 +203,7 @@ unsigned tree_sitter_djot_external_scanner_serialize(void *payload,
   unsigned size = 0;
   SAVE_TO_BUFFER(buffer, size, s->line_parsing_state);
   SAVE_ARRAY(buffer, size, (&(s->block_array)));
+  SAVE_ARRAY(buffer, size, (&(s->potential_inlines)));
   SAVE_ARRAY(buffer, size, (&(s->remained_tokens)));
   return size;
 }
@@ -219,6 +225,7 @@ void tree_sitter_djot_external_scanner_deserialize(void *payload,
   unsigned size = 0;
   LOAD_FROM_BUFFER(buffer, size, (s->line_parsing_state));
   LOAD_ARRAY(buffer, size, (&(s->block_array)))
+  LOAD_ARRAY(buffer, size, (&(s->potential_inlines)))
   LOAD_ARRAY(buffer, size, (&(s->remained_tokens)))
 #ifdef TREE_SITTER_DEBUG
   if (size != length) {
@@ -602,6 +609,7 @@ static void try_parse_eol(struct ScannerState *s, TSLexer *lexer,
 static void initState(struct ScannerState *s) {
   s->line_parsing_state = PARSING_BLOCK_START;
   array_init(&(s->block_array));
+  array_init(&(s->potential_inlines));
   array_init(&(s->remained_tokens));
 }
 // ---- tree-sitter state utils end ----
