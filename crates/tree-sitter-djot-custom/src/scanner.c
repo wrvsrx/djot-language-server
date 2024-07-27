@@ -254,6 +254,11 @@ bool tree_sitter_djot_external_scanner_scan(void *payload, TSLexer *lexer,
     return false;
   }
 
+  // if we're parsing block start, column should be 0
+  if (s->line_parsing_state == PARSING_BLOCK_START) {
+    assert(lexer->get_column(lexer) == 0);
+  }
+
   // we must emit token to change state
   // so we emit ignored if we don't emit any token
   // therefore we can't call mark_end after that
@@ -294,8 +299,7 @@ bool tree_sitter_djot_external_scanner_scan(void *payload, TSLexer *lexer,
   switch (s->line_parsing_state) {
   case PARSING_BLOCK_START:
     // parse at line start
-    // might start some blocks
-    assert(lexer->get_column(lexer) == 0);
+    // must start some blocks
     tryContainersStarts(s, lexer, valid_symbols);
     // if parse succecfully, we should have some tokens in remained_tokens
     assert(s->remained_tokens.size > 0);
