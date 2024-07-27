@@ -58,11 +58,12 @@ Heading: simple
 -------------------------------------------------------------------------------
 
 (document
-  (section
-    (heading
-      (heading_marker)
-      (inline
-        (str)))))
+  (block
+    (section
+      (heading
+        (heading_marker)
+        (inline
+          (str))))))
 
 ===============================================================================
 Heading: multiple headings
@@ -74,18 +75,20 @@ Heading: multiple headings
 -------------------------------------------------------------------------------
 
 (document
-  (section
-    (heading
-      (heading_marker)
-      (inline
-        (str)))
-    (block
-      (blankline)))
-  (section
-    (heading
-      (heading_marker)
-      (inline
-        (str)))))
+  (block
+    (section
+      (heading
+        (heading_marker)
+        (inline
+          (str)))
+      (block
+        (blankline))))
+  (block
+    (section
+      (heading
+        (heading_marker)
+        (inline
+          (str))))))
 
 ===============================================================================
 Heading: multiline headings using softbreak
@@ -96,15 +99,16 @@ Heading: multiline headings using softbreak
 -------------------------------------------------------------------------------
 
 (document
-  (section
-    (heading
-      (heading_marker)
-      (inline
-        (str))
-      (inline
-        (softbreak))
-      (inline
-        (str)))))
+  (block
+    (section
+      (heading
+        (heading_marker)
+        (inline
+          (str))
+        (inline
+          (softbreak))
+        (inline
+          (str))))))
 
 ===============================================================================
 Heading: multiline headings using markers
@@ -115,16 +119,17 @@ Heading: multiline headings using markers
 -------------------------------------------------------------------------------
 
 (document
-  (section
-    (heading
-      (heading_marker)
-      (inline
-        (str))
-      (inline
-        (softbreak))
-      (heading_marker)
-      (inline
-        (str)))))
+  (block
+    (section
+      (heading
+        (heading_marker)
+        (inline
+          (str))
+        (inline
+          (softbreak))
+        (heading_marker)
+        (inline
+          (str))))))
 
 ===============================================================================
 Heading: multiline headings using softbreak and markers
@@ -136,20 +141,21 @@ Heading: multiline headings using softbreak and markers
 -------------------------------------------------------------------------------
 
 (document
-  (section
-    (heading
-      (heading_marker)
-      (inline
-        (str))
-      (inline
-        (softbreak))
-      (inline
-        (str))
-      (inline
-        (softbreak))
-      (heading_marker)
-      (inline
-        (str)))))
+  (block
+    (section
+      (heading
+        (heading_marker)
+        (inline
+          (str))
+        (inline
+          (softbreak))
+        (inline
+          (str))
+        (inline
+          (softbreak))
+        (heading_marker)
+        (inline
+          (str))))))
 
 ===============================================================================
 Heading: simple with hash as content
@@ -159,11 +165,12 @@ Heading: simple with hash as content
 -------------------------------------------------------------------------------
 
 (document
-  (section
-    (heading
-      (heading_marker)
-      (inline
-        (str)))))
+  (block
+    (section
+      (heading
+        (heading_marker)
+        (inline
+          (str))))))
 
 ===============================================================================
 Heading: a long long marker
@@ -173,11 +180,12 @@ Heading: a long long marker
 -------------------------------------------------------------------------------
 
 (document
-  (section
-    (heading
-      (heading_marker)
-      (inline
-        (str)))))
+  (block
+    (section
+      (heading
+        (heading_marker)
+        (inline
+          (str))))))
 
 ===============================================================================
 Heading: non-heading without spaces
@@ -201,16 +209,17 @@ Heading: multiline heading with hash as content
 -------------------------------------------------------------------------------
 
 (document
-  (section
-    (heading
-      (heading_marker)
-      (inline
-        (str))
-      (inline
-        (softbreak))
-      (heading_marker)
-      (inline
-        (str)))))
+  (block
+    (section
+      (heading
+        (heading_marker)
+        (inline
+          (str))
+        (inline
+          (softbreak))
+        (heading_marker)
+        (inline
+          (str))))))
 
 ===============================================================================
 Heading: Empty heading
@@ -220,9 +229,10 @@ Heading: Empty heading
 -------------------------------------------------------------------------------
 
 (document
-  (section
-    (heading
-      (heading_marker))))
+  (block
+    (section
+      (heading
+        (heading_marker)))))
 
 ===============================================================================
 Section: Nested section

@@ -143,11 +143,11 @@ static void try_parse_inline(struct ScannerState *s, TSLexer *lexer,
 static enum TokenType close_block_token_type(enum BlockType const t);
 static void close_block(struct ScannerState *s, TSLexer *lexer,
                         const bool *valid_symbols, uint32_t const length);
-static bool close_blocks_when_meeting_blankline(struct ScannerState *s,
-                                                TSLexer *lexer,
-                                                const bool *valid_symbols,
-                                                uint32_t length);
-static bool close_blocks_when_meeting_possible_heading(
+static void try_closing_blocks_when_meeting_blankline(struct ScannerState *s,
+                                                      TSLexer *lexer,
+                                                      const bool *valid_symbols,
+                                                      uint32_t length);
+static void try_closing_blocks_when_meeting_possible_heading(
     struct ScannerState *s, TSLexer *lexer, const bool *valid_symbols,
     uint32_t length);
 // ---- function declaration end ----
@@ -436,10 +436,12 @@ static bool try_parse_heading_start(struct ScannerState *s, TSLexer *lexer,
       push_token(
           s, (struct Token){.type = HEADING_MARKER, .length = heading_level});
     }
-    return true;
   } else {
-    return false;
+    // it's not a heading
+    push_block(s, (struct Block){.type = PARAGRAPH});
+    push_token(s, (struct Token){.type = PARAGRAPH_START, .length = 0});
   }
+  return true;
 }
 
 static bool containOtherBlock(enum BlockType t) {
@@ -543,15 +545,6 @@ static void try_parse_eol(struct ScannerState *s, TSLexer *lexer,
   printf("---- eol length %d\n", length);
 #endif
 
-  bool close_result = false;
-
-  // always close blankline when meeting eol
-  struct Block const *t = array_back(&(s->block_array));
-  if (t->type == BLANKLINE) {
-    close_block(s, lexer, valid_symbols, length);
-    close_result = true;
-  }
-
   // close all blocks while meeting eof
   if (lexer->eof(lexer)) {
 #ifdef TREE_SITTER_DEBUG
@@ -559,6 +552,7 @@ static void try_parse_eol(struct ScannerState *s, TSLexer *lexer,
 #endif
     while (s->block_array.size > 0) {
       close_block(s, lexer, valid_symbols, length);
+      length = 0;
     }
     return;
   }
@@ -572,26 +566,27 @@ static void try_parse_eol(struct ScannerState *s, TSLexer *lexer,
   case '\r':
   case '\n':
     // nextline is blankline
-    close_result =
-        close_blocks_when_meeting_blankline(s, lexer, valid_symbols, length);
+    try_closing_blocks_when_meeting_blankline(s, lexer, valid_symbols, length);
     break;
   case '#':
     // nextline might be heading
-    close_result = close_blocks_when_meeting_possible_heading(
-        s, lexer, valid_symbols, length);
+    try_closing_blocks_when_meeting_possible_heading(s, lexer, valid_symbols,
+                                                     length);
     break;
-  default:
-    break;
+  default: {
+    struct Block const *t = array_back(&(s->block_array));
+    if (t->type == BLANKLINE) {
+      // always close blankline
+      close_block(s, lexer, valid_symbols, length);
+      s->line_parsing_state = PARSING_BLOCK_START;
+      break;
+    } else {
+      // continue previous block
+      push_token(s, (struct Token){.type = SOFTBREAK, .length = length});
+      s->line_parsing_state = PARSING_INLINE;
+      break;
+    }
   }
-
-  if (close_result) {
-    // if we close some block, then we should start parsing block start
-    s->line_parsing_state = PARSING_BLOCK_START;
-  } else {
-    // if we don't close any block, then we should continue parsing inline
-    // this eol should be treated as softbreak
-    s->line_parsing_state = PARSING_INLINE;
-    push_token(s, (struct Token){.type = SOFTBREAK, .length = length});
   }
 }
 // ---- block end ----
@@ -628,11 +623,10 @@ static void close_block(struct ScannerState *s, TSLexer *lexer,
   }
   pop_block(s);
 }
-static bool close_blocks_when_meeting_blankline(struct ScannerState *s,
-                                                TSLexer *lexer,
-                                                const bool *valid_symbols,
-                                                uint32_t length) {
-  bool close_result = false;
+static void try_closing_blocks_when_meeting_blankline(struct ScannerState *s,
+                                                      TSLexer *lexer,
+                                                      const bool *valid_symbols,
+                                                      uint32_t length) {
   struct Block const *t = array_back(&(s->block_array));
   // when meet blankline, we don't need to close blocks recursively
   // blankline will only close heading, paragraph and blankline
@@ -641,32 +635,35 @@ static bool close_blocks_when_meeting_blankline(struct ScannerState *s,
   case PARAGRAPH:
   case BLANKLINE:
     close_block(s, lexer, valid_symbols, length);
-    close_result = true;
+    s->line_parsing_state = PARSING_BLOCK_START;
     break;
   case DOCUMENT:
   case SECTION:
+    push_token(s, (struct Token){.type = SOFTBREAK, .length = length});
+    s->line_parsing_state = PARSING_INLINE;
     break;
   }
-
-  return close_result;
 }
-static bool close_blocks_when_meeting_possible_heading(
+static void try_closing_blocks_when_meeting_possible_heading(
     struct ScannerState *s, TSLexer *lexer, const bool *valid_symbols,
     uint32_t length) {
-  bool close_result = false;
+#ifdef TREE_SITTER_DEBUG
+  printf("---- try_closing_blocks_when_meeting_possible_heading\n");
+#endif
   uint8_t heading_level = count_heading_level(lexer);
   if (heading_level > 0) {
     uint32_t break_at = s->block_array.size;
     // when meeting heading, we might stop a section or a heading
-    struct Block const *t = array_back(&(s->block_array));
     FOR(i, s->block_array.size) {
       __typeof__(s->block_array.size) block_index = s->block_array.size - i - 1;
       struct Block const *t = array_get(&(s->block_array), block_index);
+      bool cont = true;
       switch (t->type) {
       case HEADING:
         if (t->data.heading.level != heading_level) {
           break_at = block_index;
         }
+        cont = false;
         break;
       case SECTION:
         if (t->data.section.level >= heading_level) {
@@ -675,16 +672,43 @@ static bool close_blocks_when_meeting_possible_heading(
         break;
       case BLANKLINE:
         break_at = block_index;
+        break;
       case DOCUMENT:
       case PARAGRAPH:
         break;
       }
+      if (!cont) {
+        break;
+      }
     }
-    FOR(i, (s->block_array.size - break_at)) {
-      close_block(s, lexer, valid_symbols, length);
-      close_result = true;
+#ifdef TREE_SITTER_DEBUG
+    printf("---- stack depth: %d, break at: %d\n", s->block_array.size,
+           break_at);
+#endif
+    if (break_at < s->block_array.size) {
+      while (s->block_array.size > break_at) {
+#ifdef TREE_SITTER_DEBUG
+        printf("---- closing block because of heading\n");
+#endif
+        close_block(s, lexer, valid_symbols, length);
+        // only first block end can have non-zero length
+        length = 0;
+      }
+      s->line_parsing_state = PARSING_BLOCK_START;
+    } else {
+      struct Block const *t = array_back(&(s->block_array));
+      if (t->type == HEADING) {
+        // we need to continue the heading
+        assert(t->data.heading.level == heading_level);
+        push_token(s, (struct Token){.type = SOFTBREAK, .length = length});
+        push_token(
+            s, (struct Token){.type = HEADING_MARKER, .length = heading_level});
+        s->line_parsing_state = PARSING_INLINE;
+      }
     }
+  } else {
+    push_token(s, (struct Token){.type = SOFTBREAK, .length = length});
+    s->line_parsing_state = PARSING_INLINE;
   }
-  return close_result;
 }
 // ---- close block end ----
