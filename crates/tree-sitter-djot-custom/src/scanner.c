@@ -32,6 +32,12 @@ enum TokenType {
   IGNORED,
 };
 
+enum CharType {
+  WHITESPACE,
+  EOL,
+  NORMAL,
+};
+
 enum BlockType {
   DOCUMENT,
   SECTION,
@@ -132,8 +138,7 @@ struct ScannerState {
 // ---- function declaration start ----
 static void initState(struct ScannerState *s);
 
-static bool followedByWhitespace(TSLexer *lexer);
-static bool followedByEol(TSLexer *lexer);
+static enum CharType followedBy(TSLexer const *lexer);
 
 static void pop_token(struct ScannerState *s);
 
@@ -271,7 +276,7 @@ bool tree_sitter_djot_external_scanner_scan(void *payload, TSLexer *lexer,
   // therefore we can't call mark_end after that
   // we can only push token to remained_tokens
   {
-    while (followedByWhitespace(lexer)) {
+    while (followedBy(lexer) == WHITESPACE) {
       lexer->advance(lexer, true);
     }
     lexer->mark_end(lexer);
@@ -320,7 +325,7 @@ bool tree_sitter_djot_external_scanner_scan(void *payload, TSLexer *lexer,
     // parse eol
     // might end some blocks
     // this parse must success
-    assert(followedByEol(lexer));
+    assert(followedBy(lexer) == EOL);
     try_parse_eol(s, lexer, valid_symbols);
     break;
   }
@@ -376,22 +381,22 @@ static void pop_token(struct ScannerState *s) {
 }
 // ---- token push and pop end ----
 
-// ---- parser utils start ----
-static bool followedByWhitespace(TSLexer *lexer) {
-  return lexer->lookahead == ' ' || lexer->lookahead == '\t';
-}
-
-static bool followedByEol(TSLexer *lexer) {
-  return lexer->lookahead == '\r' || lexer->lookahead == '\n';
-}
-
-static bool followedByWhitespaceOrEol(TSLexer *lexer) {
-  return followedByWhitespace(lexer) || followedByEol(lexer);
+static enum CharType followedBy(TSLexer const *lexer) {
+  switch (lexer->lookahead) {
+  case ' ':
+  case '\t':
+    return WHITESPACE;
+  case '\r':
+  case '\n':
+    return EOL;
+  default:
+    return NORMAL;
+  }
 }
 
 static uint32_t try_consume_whitespace(struct ScannerState *s, TSLexer *lexer) {
   uint32_t res = 0;
-  while (followedByWhitespace(lexer)) {
+  while (followedBy(lexer) == WHITESPACE) {
     ++res;
     lexer->advance(lexer, true);
   }
@@ -409,7 +414,7 @@ static uint8_t count_heading_level(TSLexer *lexer) {
     ++heading_level;
     lexer->advance(lexer, false);
   }
-  if (!followedByWhitespaceOrEol(lexer)) {
+  if (!(followedBy(lexer) == WHITESPACE || followedBy(lexer) == EOL)) {
     heading_level = 0;
   }
 #ifdef TREE_SITTER_DEBUG
@@ -522,14 +527,14 @@ static void tryContainersStarts(struct ScannerState *s, TSLexer *lexer,
 
 static void try_parse_inline(struct ScannerState *s, TSLexer *lexer,
                              const bool *valid_symbols) {
-  if (followedByEol(lexer)) {
+  if (followedBy(lexer) == EOL) {
     s->line_parsing_state = PARSING_EOL;
     return;
   }
   //  currently we only support STR as inline
   try_consume_whitespace(s, lexer);
   uint32_t length = 0;
-  while (!followedByEol(lexer)) {
+  while (followedBy(lexer) != EOL) {
     lexer->advance(lexer, false);
     ++length;
   }
@@ -539,7 +544,7 @@ static void try_parse_inline(struct ScannerState *s, TSLexer *lexer,
 
 static void try_parse_eol(struct ScannerState *s, TSLexer *lexer,
                           const bool *valid_symbols) {
-  assert(followedByEol(lexer));
+  assert(followedBy(lexer) == EOL);
   // close some blocks or return softbreak
   // if close some blocks, then change state to PARSING_BLOCK_START
   // otherwise, change state to PARSING_INLINE
@@ -572,7 +577,7 @@ static void try_parse_eol(struct ScannerState *s, TSLexer *lexer,
   }
 
   // close other blocks depends on nextline
-  while (followedByWhitespace(lexer)) {
+  while (followedBy(lexer) == WHITESPACE) {
     lexer->advance(lexer, true);
   }
 
