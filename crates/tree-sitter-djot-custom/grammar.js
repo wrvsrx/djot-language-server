@@ -14,6 +14,7 @@ module.exports = grammar({
     blankline: ($) => seq($._blankline_start, $._blankline_end),
 
     inline: ($) => choice($.str, $.softbreak),
+    str: ($) => seq($._str_start, repeat1($._word), $._str_end),
   },
 
   externals: ($) => [
@@ -30,7 +31,9 @@ module.exports = grammar({
     $._blankline_start,
     $._blankline_end,
 
-    $.str,
+    $._str_start,
+    $._str_end,
+    $._word,
     $.softbreak,
 
     $._ignored,

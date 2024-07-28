@@ -26,7 +26,9 @@ enum TokenType {
   BLANKLINE_START,
   BLANKLINE_END,
 
-  STR,
+  STR_BEGIN,
+  STR_END,
+  WORD,
   SOFTBREAK,
 
   IGNORED,
@@ -85,7 +87,16 @@ static char const *block_name(enum BlockType type) {
   }
 }
 
-struct Inline {};
+enum InlineType { STR };
+
+union InlineData {
+  struct Empty str;
+};
+
+struct Inline {
+  enum InlineType type;
+  union InlineData data;
+};
 typedef Array(struct Inline) InlineArray;
 
 struct Token {
@@ -113,8 +124,12 @@ static char const *token_name(enum TokenType type) {
     return "BLANKLINE_START";
   case BLANKLINE_END:
     return "BLANKLINE_END";
-  case STR:
-    return "STR";
+  case STR_BEGIN:
+    return "STR_BEGIN";
+  case STR_END:
+    return "STR_END";
+  case WORD:
+    return "WORD";
   case SOFTBREAK:
     return "SOFTBREAK";
   case IGNORED:
@@ -477,6 +492,12 @@ static bool containOtherBlock(enum BlockType t) {
     return false;
   }
 }
+static bool containOtherInline(enum InlineType t) {
+  switch (t) {
+  case STR:
+    return false;
+  }
+}
 
 // only should be called when previous line doesn't end by softbreak
 // or called by itself
@@ -529,19 +550,34 @@ static void tryContainersStarts(struct ScannerState *s, TSLexer *lexer,
 
 static void try_parse_inline(struct ScannerState *s, TSLexer *lexer,
                              const bool *valid_symbols) {
-  if (followedBy(lexer) == EOL) {
+  switch (followedBy(lexer)) {
+  case WHITESPACE:
+    try_consume_whitespace(s, lexer);
+    break;
+  case EOL:
     s->line_parsing_state = PARSING_EOL;
-    return;
+    if (s->potential_inlines.size > 0 &&
+        array_back(&(s->potential_inlines))->type == STR) {
+      array_pop(&(s->potential_inlines));
+      push_token(s, (struct Token){.type = STR_END, .length = 0});
+    }
+    break;
+  case NORMAL:
+  case SHARP: {
+    if (s->potential_inlines.size == 0 ||
+        containOtherInline(array_back(&(s->potential_inlines))->type)) {
+      array_push(&(s->potential_inlines), (struct Inline){.type = STR});
+      push_token(s, (struct Token){.type = STR_BEGIN, .length = 0});
+    }
+    uint32_t length = 0;
+    while (followedBy(lexer) == NORMAL || followedBy(lexer) == SHARP) {
+      ++length;
+      lexer->advance(lexer, false);
+    }
+    push_token(s, (struct Token){.type = WORD, .length = length});
+    break;
   }
-  //  currently we only support STR as inline
-  try_consume_whitespace(s, lexer);
-  uint32_t length = 0;
-  while (followedBy(lexer) != EOL) {
-    lexer->advance(lexer, false);
-    ++length;
   }
-  push_token(s, (struct Token){.type = STR, .length = length});
-  s->line_parsing_state = PARSING_EOL;
 }
 
 static void try_parse_eol(struct ScannerState *s, TSLexer *lexer,
