@@ -35,6 +35,7 @@ enum TokenType {
 enum CharType {
   WHITESPACE,
   EOL,
+  SHARP,
   NORMAL,
 };
 
@@ -389,6 +390,8 @@ static enum CharType followedBy(TSLexer const *lexer) {
   case '\r':
   case '\n':
     return EOL;
+  case '#':
+    return SHARP;
   default:
     return NORMAL;
   }
@@ -486,12 +489,11 @@ static void tryContainersStarts(struct ScannerState *s, TSLexer *lexer,
   bool parse_result = false;
   if (containOtherBlock(t->type)) {
     // they can contain other blocks
-    switch (lexer->lookahead) {
-    case '#':
+    switch (followedBy(lexer)) {
+    case SHARP:
       parse_result = try_parse_heading_start(s, lexer, valid_symbols);
       break;
-    case '\r':
-    case '\n':
+    case EOL:
       push_block(s, (struct Block){.type = BLANKLINE});
       push_token(s, (struct Token){.type = BLANKLINE_START, .length = 0});
       parse_result = true;
@@ -581,13 +583,12 @@ static void try_parse_eol(struct ScannerState *s, TSLexer *lexer,
     lexer->advance(lexer, true);
   }
 
-  switch (lexer->lookahead) {
-  case '\r':
-  case '\n':
+  switch (followedBy(lexer)) {
+  case EOL:
     // nextline is blankline
     try_closing_blocks_when_meeting_blankline(s, lexer, valid_symbols, length);
     break;
-  case '#':
+  case SHARP:
     // nextline might be heading
     try_closing_blocks_when_meeting_possible_heading(s, lexer, valid_symbols,
                                                      length);
