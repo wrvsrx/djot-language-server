@@ -13,7 +13,7 @@ parseBlockStart = undefined
 -- |每次从 state 这里获得一个 parser
 --  每次从 state 这里获得一个 parser
 parse :: State -> String -> (State, Token)
-parse state = undefined
+parse state string = undefined
 
 -- 如果当前在 parse block close 状态
 -- 从上到下判断每个 Block 是否需要结束
