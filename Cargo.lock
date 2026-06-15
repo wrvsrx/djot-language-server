@@ -65,6 +65,7 @@ dependencies = [
  "futures",
  "jotdown",
  "lsp-types",
+ "serde_json",
  "tokio",
  "tower",
  "tracing",
