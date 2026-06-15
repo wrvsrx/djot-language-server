@@ -1,10 +1,10 @@
 {
-  description = "flake template";
+  description = "djot-language-server";
 
   inputs = {
-    flake-lock.url = "github:wrvsrx/flake-lock";
-    nixpkgs.follows = "flake-lock/nixpkgs";
-    flake-parts.follows = "flake-lock/flake-parts";
+    nur-wrvsrx.url = "github:wrvsrx/nur-packages";
+    nixpkgs.follows = "nur-wrvsrx/nixpkgs";
+    flake-parts.follows = "nur-wrvsrx/flake-parts";
   };
 
   outputs =
