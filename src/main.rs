@@ -11,10 +11,10 @@ use async_lsp::{ClientSocket, LanguageServer, ResponseError};
 use futures::future::BoxFuture;
 use jotdown::{Container, Event, Parser};
 use lsp_types::{
-    DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
-    DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse, InitializeParams,
-    InitializeResult, OneOf, Position, Range, ServerCapabilities, SymbolKind,
-    TextDocumentSyncCapability, TextDocumentSyncKind, Url,
+    DidChangeConfigurationParams, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
+    DidOpenTextDocumentParams, DidSaveTextDocumentParams, DocumentSymbol, DocumentSymbolParams,
+    DocumentSymbolResponse, InitializeParams, InitializeResult, OneOf, Position, Range,
+    ServerCapabilities, SymbolKind, TextDocumentSyncCapability, TextDocumentSyncKind, Url,
 };
 use tower::ServiceBuilder;
 use tracing::Level;
@@ -67,6 +67,21 @@ impl LanguageServer for ServerState {
 
     fn did_close(&mut self, params: DidCloseTextDocumentParams) -> Self::NotifyResult {
         self.documents.remove(&params.text_document.uri);
+        ControlFlow::Continue(())
+    }
+
+    // async-lsp breaks the main loop on any notification we don't explicitly
+    // handle (the omni-trait default is `ControlFlow::Break(Routing(..))`), so
+    // editors sending these would otherwise kill the server. Accept and ignore
+    // them for now; `did_save` is a natural hook for re-running diagnostics later.
+    fn did_save(&mut self, _params: DidSaveTextDocumentParams) -> Self::NotifyResult {
+        ControlFlow::Continue(())
+    }
+
+    fn did_change_configuration(
+        &mut self,
+        _params: DidChangeConfigurationParams,
+    ) -> Self::NotifyResult {
         ControlFlow::Continue(())
     }
 
