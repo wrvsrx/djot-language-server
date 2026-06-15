@@ -13,8 +13,9 @@ use jotdown::{Container, Event, Parser};
 use lsp_types::{
     DidChangeConfigurationParams, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
     DidOpenTextDocumentParams, DidSaveTextDocumentParams, DocumentSymbol, DocumentSymbolParams,
-    DocumentSymbolResponse, InitializeParams, InitializeResult, OneOf, Position, Range,
-    ServerCapabilities, SymbolKind, TextDocumentSyncCapability, TextDocumentSyncKind, Url,
+    DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse, InitializeParams,
+    InitializeResult, Location, OneOf, Position, Range, ServerCapabilities, SymbolKind,
+    TextDocumentSyncCapability, TextDocumentSyncKind, Url,
 };
 use tower::ServiceBuilder;
 use tracing::Level;
@@ -44,6 +45,7 @@ impl LanguageServer for ServerState {
                         TextDocumentSyncKind::FULL,
                     )),
                     document_symbol_provider: Some(OneOf::Left(true)),
+                    definition_provider: Some(OneOf::Left(true)),
                     ..ServerCapabilities::default()
                 },
                 server_info: None,
@@ -94,6 +96,29 @@ impl LanguageServer for ServerState {
             .get(&params.text_document.uri)
             .map(|text| heading_symbols(text));
         Box::pin(async move { Ok(symbols.map(DocumentSymbolResponse::Nested)) })
+    }
+
+    fn definition(
+        &mut self,
+        params: GotoDefinitionParams,
+    ) -> BoxFuture<'static, Result<Option<GotoDefinitionResponse>, Self::Error>> {
+        let pos = params.text_document_position_params;
+        let uri = pos.text_document.uri;
+        let location = self.documents.get(&uri).and_then(|text| {
+            let offset = position_to_offset(text, pos.position);
+            let index = build_index(text);
+            let reference = index.references.iter().find(|r| r.source.contains(&offset))?;
+            match &reference.target {
+                // Same-document anchor: jump to the heading / anchored block.
+                RefTarget::Internal { id } => index.anchors.get(id).map(|anchor| Location {
+                    uri: uri.clone(),
+                    range: anchor.range,
+                }),
+                // Cross-file targets and external URLs are not resolved yet.
+                RefTarget::External { .. } | RefTarget::Url(_) => None,
+            }
+        });
+        Box::pin(async move { Ok(location.map(GotoDefinitionResponse::Scalar)) })
     }
 }
 
@@ -215,6 +240,130 @@ fn heading_symbols(text: &str) -> Vec<DocumentSymbol> {
     }
 
     roots
+}
+
+/// A jump target: anything bearing an id — a heading/section, or any block or
+/// inline carrying an explicit `{#id}` attribute.
+struct Anchor {
+    /// Where "go to definition" should land (the heading or anchored line).
+    range: Range,
+}
+
+/// A link in the document and what it points at.
+struct Reference {
+    /// Byte range of the whole link, for cursor hit-testing.
+    source: std::ops::Range<usize>,
+    target: RefTarget,
+}
+
+/// The resolved destination of a link. jotdown hands us a single destination
+/// string for every link form (inline, reference, implicit), so we only need to
+/// classify that string.
+// `External`/`Url` payloads are populated now but only consumed once cross-file
+// definition and diagnostics land.
+#[allow(dead_code)]
+enum RefTarget {
+    /// `#id` — an anchor in the same document.
+    Internal { id: String },
+    /// `path` or `path#id` — another file (not resolved yet).
+    External { path: String, id: Option<String> },
+    /// `http(s):`, `mailto:`, … — not a block/heading reference.
+    Url(String),
+}
+
+/// Per-document index of anchors (by id) and outgoing references.
+struct DocIndex {
+    anchors: HashMap<String, Anchor>,
+    references: Vec<Reference>,
+}
+
+/// Classify a link destination string into a [`RefTarget`].
+fn parse_dst(dst: &str) -> RefTarget {
+    if dst.contains("://") || dst.starts_with("mailto:") {
+        RefTarget::Url(dst.to_string())
+    } else if let Some(id) = dst.strip_prefix('#') {
+        RefTarget::Internal { id: id.to_string() }
+    } else if let Some((path, id)) = dst.split_once('#') {
+        RefTarget::External {
+            path: path.to_string(),
+            id: Some(id.to_string()),
+        }
+    } else {
+        RefTarget::External {
+            path: dst.to_string(),
+            id: None,
+        }
+    }
+}
+
+/// Walk the document once, collecting anchors and references.
+fn build_index(text: &str) -> DocIndex {
+    let mut anchors: HashMap<String, Anchor> = HashMap::new();
+    let mut references = Vec::new();
+    // Stack of (destination, start byte) for links currently open.
+    let mut open_links: Vec<(String, usize)> = Vec::new();
+
+    let record_anchor = |anchors: &mut HashMap<String, Anchor>, id: String, span: &std::ops::Range<usize>| {
+        anchors.entry(id).or_insert_with(|| Anchor {
+            range: Range {
+                start: offset_to_position(text, span.start),
+                end: offset_to_position(text, span.end),
+            },
+        });
+    };
+
+    for (event, span) in Parser::new(text).into_offset_iter() {
+        match event {
+            // Headings carry the (possibly auto-generated) id directly.
+            Event::Start(Container::Heading { id, .. }, _) => {
+                record_anchor(&mut anchors, id.into_owned(), &span);
+            }
+            Event::Start(container, attrs) => {
+                // Any other element with an explicit {#id} is also an anchor.
+                if let Some(id) = attrs.get_value("id") {
+                    record_anchor(&mut anchors, id.to_string(), &span);
+                }
+                if let Container::Link(dst, _) = container {
+                    open_links.push((dst.into_owned(), span.start));
+                }
+            }
+            Event::End(Container::Link(_, _)) => {
+                if let Some((dst, start)) = open_links.pop() {
+                    references.push(Reference {
+                        source: start..span.end,
+                        target: parse_dst(&dst),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    DocIndex {
+        anchors,
+        references,
+    }
+}
+
+/// Convert an LSP `Position` (line + UTF-16 column) into a byte offset.
+fn position_to_offset(text: &str, pos: Position) -> usize {
+    let mut line = 0u32;
+    let mut character = 0u32;
+    for (i, c) in text.char_indices() {
+        if line == pos.line && character == pos.character {
+            return i;
+        }
+        if c == '\n' {
+            if line == pos.line {
+                return i; // position is past the line's end: clamp to line end
+            }
+            line += 1;
+            character = 0;
+        } else {
+            character += c.len_utf16() as u32;
+        }
+    }
+    text.len()
 }
 
 /// Convert a byte offset into an LSP `Position` (line + UTF-16 column).

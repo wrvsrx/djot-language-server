@@ -136,3 +136,43 @@ fn did_save_does_not_crash_the_server() {
     let answered = responses.iter().any(|m| m["id"] == json!(2) && m.get("result").is_some());
     assert!(answered, "server did not answer documentSymbol after didSave");
 }
+
+/// `textDocument/definition` resolves same-document links — both explicit
+/// `#id` links and implicit heading references — to the heading, and returns
+/// nothing for cross-file targets (not implemented yet).
+#[test]
+fn definition_resolves_same_document_links() {
+    // line 0: heading, line 2: two links, line 7: Epilogue heading, line 9: cross-file
+    let doc = "# My Heading\n\nSee [inline](#My-Heading) and [Epilogue][].\n\n{#anchor}\nA block.\n\n## Epilogue\n\n[ext](other.dj#sec)\n";
+    let def = |id: i64, line: i64, ch: i64| {
+        json!({"jsonrpc":"2.0","id":id,"method":"textDocument/definition",
+               "params":{"textDocument":{"uri":"file:///t.dj"},"position":{"line":line,"character":ch}}})
+    };
+    let msgs = [
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{},"processId":null,"rootUri":null}}),
+        json!({"jsonrpc":"2.0","method":"initialized","params":{}}),
+        json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///t.dj","languageId":"djot","version":1,"text":doc}}}),
+        def(10, 2, 8),  // inside [inline](#My-Heading) -> line 0
+        def(11, 2, 35), // inside [Epilogue][]          -> line 7
+        def(12, 9, 3),  // inside [ext](other.dj#sec)   -> null (cross-file)
+        json!({"jsonrpc":"2.0","id":99,"method":"shutdown","params":null}),
+        json!({"jsonrpc":"2.0","method":"exit","params":null}),
+    ];
+
+    let responses = run_session(&msgs);
+    let result = |id: i64| {
+        responses
+            .iter()
+            .find(|m| m["id"] == json!(id))
+            .unwrap_or_else(|| panic!("no response for id {id}"))["result"]
+            .clone()
+    };
+
+    // Explicit #id link jumps to the heading on line 0.
+    assert_eq!(result(10)["range"]["start"]["line"], json!(0));
+    assert_eq!(result(10)["uri"], json!("file:///t.dj"));
+    // Implicit heading reference [Epilogue][] jumps to the Epilogue heading.
+    assert_eq!(result(11)["range"]["start"]["line"], json!(7));
+    // Cross-file target is not resolved yet.
+    assert_eq!(result(12), json!(null));
+}
