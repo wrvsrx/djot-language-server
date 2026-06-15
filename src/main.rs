@@ -97,50 +97,124 @@ impl LanguageServer for ServerState {
     }
 }
 
-/// Extract one flat `DocumentSymbol` per heading in the document.
+/// A djot section being assembled while walking the event stream.
+struct SectionFrame {
+    /// Byte where the section (heading line) starts — the symbol's full range start.
+    range_start: usize,
+    /// Heading level, for the `detail` label.
+    level: u16,
+    /// Accumulated heading text.
+    name: String,
+    /// Byte span of the heading line itself — the symbol's selection range.
+    selection_start: usize,
+    selection_end: usize,
+    /// Whether we are currently inside this section's own heading, collecting text.
+    capturing: bool,
+    /// Whether this section's heading has already been captured (guards against
+    /// stray headings inside nested non-section containers, e.g. a blockquote).
+    captured: bool,
+    /// Child sections closed while this one was still open.
+    children: Vec<DocumentSymbol>,
+}
+
+impl SectionFrame {
+    fn into_symbol(self, text: &str, section_end: usize) -> DocumentSymbol {
+        let range = Range {
+            start: offset_to_position(text, self.range_start),
+            end: offset_to_position(text, section_end),
+        };
+        let selection_range = Range {
+            start: offset_to_position(text, self.selection_start),
+            end: offset_to_position(text, self.selection_end),
+        };
+        #[allow(deprecated)]
+        DocumentSymbol {
+            name: if self.name.is_empty() {
+                format!("H{}", self.level)
+            } else {
+                self.name
+            },
+            detail: Some(format!("H{}", self.level)),
+            kind: SymbolKind::STRING,
+            tags: None,
+            deprecated: None,
+            range,
+            selection_range,
+            children: if self.children.is_empty() {
+                None
+            } else {
+                Some(self.children)
+            },
+        }
+    }
+}
+
+/// Build a hierarchy of `DocumentSymbol`s from the document's heading sections.
+///
+/// jotdown wraps each heading in a `Section` container that nests by heading
+/// level, so the section nesting *is* the symbol hierarchy. Each section's span
+/// (heading + body + nested subsections) becomes the symbol `range`, while the
+/// heading line becomes the `selection_range`.
 fn heading_symbols(text: &str) -> Vec<DocumentSymbol> {
-    let mut symbols = Vec::new();
-    // Frame for the heading we are currently inside: (start byte, accumulated name).
-    let mut current: Option<(usize, String)> = None;
+    let mut roots: Vec<DocumentSymbol> = Vec::new();
+    let mut stack: Vec<SectionFrame> = Vec::new();
 
     for (event, span) in Parser::new(text).into_offset_iter() {
         match event {
-            Event::Start(Container::Heading { .. }, _) => {
-                current = Some((span.start, String::new()));
+            Event::Start(Container::Section { .. }, _) => {
+                stack.push(SectionFrame {
+                    range_start: span.start,
+                    level: 0,
+                    name: String::new(),
+                    selection_start: span.start,
+                    selection_end: span.start,
+                    capturing: false,
+                    captured: false,
+                    children: Vec::new(),
+                });
             }
-            Event::Str(s) => {
-                if let Some((_, name)) = current.as_mut() {
-                    name.push_str(&s);
+            Event::Start(Container::Heading { level, .. }, _) => {
+                // Only the first heading directly inside a section is that
+                // section's title; ignore headings in nested non-section blocks.
+                if let Some(top) = stack.last_mut() {
+                    if !top.captured {
+                        top.level = level;
+                        top.selection_start = span.start;
+                        top.selection_end = span.end;
+                        top.capturing = true;
+                    }
                 }
             }
-            Event::End(Container::Heading { level, .. }) => {
-                if let Some((start, name)) = current.take() {
-                    let range = Range {
-                        start: offset_to_position(text, start),
-                        end: offset_to_position(text, span.end),
-                    };
-                    #[allow(deprecated)]
-                    symbols.push(DocumentSymbol {
-                        name: if name.is_empty() {
-                            format!("H{level}")
-                        } else {
-                            name
-                        },
-                        detail: Some(format!("H{level}")),
-                        kind: SymbolKind::STRING,
-                        tags: None,
-                        deprecated: None,
-                        range,
-                        selection_range: range,
-                        children: None,
-                    });
+            Event::Str(s) => {
+                if let Some(top) = stack.last_mut() {
+                    if top.capturing {
+                        top.name.push_str(&s);
+                    }
+                }
+            }
+            Event::End(Container::Heading { .. }) => {
+                if let Some(top) = stack.last_mut() {
+                    if top.capturing {
+                        top.capturing = false;
+                        top.captured = true;
+                        top.selection_end = span.end;
+                    }
+                }
+            }
+            Event::End(Container::Section { .. }) => {
+                if let Some(frame) = stack.pop() {
+                    let symbol = frame.into_symbol(text, span.end);
+                    match stack.last_mut() {
+                        Some(parent) => parent.children.push(symbol),
+                        None => roots.push(symbol),
+                    }
                 }
             }
             _ => {}
         }
     }
 
-    symbols
+    roots
 }
 
 /// Convert a byte offset into an LSP `Position` (line + UTF-16 column).
