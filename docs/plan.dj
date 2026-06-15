@@ -1,12 +1,13 @@
-``` yaml
-title: plan
+{.metadata}
+``` toml
+title = "plan"
 ```
 
 # Features
 
 - [ ] `textDocument/documentSymbol`
   
-  - [x] headings
+  - [ ] headings
   - [ ] anchor?
   - [ ] list?
 
@@ -25,10 +26,6 @@ title: plan
 - [ ] `textDocument/semanticToken/range`?
 - [ ] `textDocument/formatting`?
 - [ ] backward reference
-
-# Fix
-
-- [x] tree-sitter-djot wrongly parse heading into list
 
 # Plan
 
