@@ -7,7 +7,7 @@ title = "plan"
 
 - [ ] `textDocument/documentSymbol`
   
-  - [ ] headings
+  - [x] headings
   - [ ] anchor?
   - [ ] list?
 
