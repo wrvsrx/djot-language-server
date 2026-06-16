@@ -36,4 +36,5 @@ The end. Feed this through the exporter:
 
 `djot-export examples/article.dj | pandoc -f json -t markdown`
 
-The `{.metadata}` block above is lifted out of the body on export.
+The `{.metadata}` block above is folded into the pandoc `Meta` map on export
+(title/author/date), not rendered in the body.
