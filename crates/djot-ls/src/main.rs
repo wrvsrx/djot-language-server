@@ -541,7 +541,7 @@ fn link_completion_context(text: &str, offset: usize) -> Option<LinkCompletionCo
 
     match state {
         LinkScanState::Label { open } => Some(LinkCompletionContext::Label {
-            replace: open..offset,
+            replace: open..label_completion_replace_end(text, offset, str_span.end),
             query: text[open + 1..offset].to_string(),
         }),
         LinkScanState::Destination { start } => {
@@ -556,6 +556,14 @@ fn link_completion_context(text: &str, offset: usize) -> Option<LinkCompletionCo
             }
         }
         LinkScanState::Text | LinkScanState::AfterLabel => None,
+    }
+}
+
+fn label_completion_replace_end(text: &str, offset: usize, limit: usize) -> usize {
+    if offset < limit && text[offset..].starts_with(']') && !is_escaped(text, offset) {
+        offset + ']'.len_utf8()
+    } else {
+        offset
     }
 }
 
