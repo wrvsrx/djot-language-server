@@ -5,6 +5,7 @@
 use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 
+use lsp_types::Url;
 use serde_json::{json, Value};
 
 /// Wrap a JSON value in an LSP `Content-Length` frame.
@@ -211,6 +212,43 @@ fn definition_jumps_across_files() {
         .clone();
 
     // Jumps into b.dj, to the "## Topic" heading (line 4).
+    assert_eq!(result["uri"], json!(b_uri));
+    assert_eq!(result["range"]["start"]["line"], json!(4));
+}
+
+/// Cross-file links may point to filenames containing spaces. jotdown gives
+/// the destination to djot-core as `other file.jd#Topic`; resolving it should
+/// read that exact filename from disk and return an encoded file URI.
+#[test]
+fn definition_jumps_to_file_with_space_in_name() {
+    let dir = std::env::temp_dir().join("djot-ls-space-file-test");
+    std::fs::create_dir_all(&dir).unwrap();
+    let a = dir.join("a.dj");
+    let b = dir.join("other file.jd");
+    std::fs::write(&a, "# A\n\nsee [to Topic](other file.jd#Topic)\n").unwrap();
+    std::fs::write(&b, "# Intro\n\ntext\n\n## Topic\n\nbody\n").unwrap();
+
+    let a_uri = Url::from_file_path(&a).unwrap().to_string();
+    let b_uri = Url::from_file_path(&b).unwrap().to_string();
+    let doc_a = std::fs::read_to_string(&a).unwrap();
+    let link_col = doc_a.lines().nth(2).unwrap().find("other file.jd").unwrap() as i64;
+
+    let msgs = [
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{},"processId":null,"rootUri":null}}),
+        json!({"jsonrpc":"2.0","method":"initialized","params":{}}),
+        json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":a_uri,"languageId":"djot","version":1,"text":doc_a}}}),
+        json!({"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{"textDocument":{"uri":a_uri},"position":{"line":2,"character":link_col}}}),
+        json!({"jsonrpc":"2.0","id":99,"method":"shutdown","params":null}),
+        json!({"jsonrpc":"2.0","method":"exit","params":null}),
+    ];
+
+    let responses = run_session(&msgs);
+    let result = responses
+        .iter()
+        .find(|m| m["id"] == json!(2))
+        .expect("no definition response")["result"]
+        .clone();
+
     assert_eq!(result["uri"], json!(b_uri));
     assert_eq!(result["range"]["start"]["line"], json!(4));
 }
