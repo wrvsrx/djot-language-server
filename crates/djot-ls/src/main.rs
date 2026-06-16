@@ -301,25 +301,64 @@ impl ServerState {
         target.id.map(|id| (target.path, id))
     }
 
-    fn resolve_hover(&self, uri: &Url, position: Position) -> Option<Hover> {
+    fn resolve_hover(&mut self, uri: &Url, position: Position) -> Option<Hover> {
         let from = uri.to_file_path().ok()?;
         let offset = position_to_offset(&self.workspace.get(&from)?.text, position);
-        let (target_path, target_id) = self.reference_target_at(&from, offset)?;
-        let entry = self.workspace.get(&target_path)?;
-        let anchor = entry.index.anchors.get(&target_id)?;
-        let range = byte_range_to_lsp(&entry.text, &anchor.range);
+
+        if let Some((id, anchor)) = self.workspace.anchor_at(&from, offset) {
+            let entry = self.workspace.get(&from)?;
+            return Some(Hover {
+                contents: HoverContents::Markup(MarkupContent {
+                    kind: MarkupKind::Markdown,
+                    value: anchor_hover_markdown(
+                        self.display_path(&from),
+                        id,
+                        &entry.text,
+                        &anchor.range,
+                    ),
+                }),
+                range: Some(byte_range_to_lsp(&entry.text, &anchor.range)),
+            });
+        }
+
+        let (target, source_range) = {
+            let reference = self.workspace.reference_at(&from, offset)?;
+            (
+                resolve_target(&from, &reference.target)?,
+                reference.source.clone(),
+            )
+        };
+
+        if !self.workspace.contains(&target.path) {
+            if let Ok(text) = std::fs::read_to_string(&target.path) {
+                self.workspace.insert(target.path.clone(), text);
+            }
+        }
+
+        let source_lsp_range = {
+            let entry = self.workspace.get(&from)?;
+            byte_range_to_lsp(&entry.text, &source_range)
+        };
+        let entry = self.workspace.get(&target.path)?;
+        let value = match &target.id {
+            Some(id) => {
+                let anchor = entry.index.anchors.get(id)?;
+                anchor_hover_markdown(
+                    self.display_path(&target.path),
+                    id,
+                    &entry.text,
+                    &anchor.range,
+                )
+            }
+            None => file_hover_markdown(self.display_path(&target.path), &entry.text),
+        };
 
         Some(Hover {
             contents: HoverContents::Markup(MarkupContent {
                 kind: MarkupKind::Markdown,
-                value: anchor_hover_markdown(
-                    self.display_path(&target_path),
-                    &target_id,
-                    &entry.text,
-                    &anchor.range,
-                ),
+                value,
             }),
-            range: Some(range),
+            range: Some(source_lsp_range),
         })
     }
 
@@ -352,6 +391,30 @@ fn anchor_hover_markdown(
         escape_markdown_code(&display_path),
         preview
     )
+}
+
+fn file_hover_markdown(display_path: String, text: &str) -> String {
+    let (line, preview) = first_preview_line(text);
+    if preview.is_empty() {
+        format!(
+            "**File**\n\n`{}:{line}`",
+            escape_markdown_code(&display_path)
+        )
+    } else {
+        format!(
+            "**File**\n\n`{}:{line}`\n\n```djot\n{}\n```",
+            escape_markdown_code(&display_path),
+            preview
+        )
+    }
+}
+
+fn first_preview_line(text: &str) -> (usize, &str) {
+    text.lines()
+        .enumerate()
+        .find(|(_, line)| !line.trim().is_empty())
+        .map(|(line, preview)| (line + 1, preview.trim_end()))
+        .unwrap_or((1, ""))
 }
 
 fn source_line_at(text: &str, offset: usize) -> &str {

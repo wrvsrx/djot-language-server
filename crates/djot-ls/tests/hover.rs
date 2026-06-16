@@ -38,6 +38,36 @@ fn hover_shows_link_target_heading() {
 }
 
 #[test]
+fn hover_shows_link_target_file() {
+    let dir = std::env::temp_dir().join("djot-ls-hover-file-test");
+    std::fs::create_dir_all(&dir).unwrap();
+    let a = dir.join("a.dj");
+    let b = dir.join("b.dj");
+    let doc_a = "# A\n\nsee [file](b.dj)\n";
+    std::fs::write(&a, doc_a).unwrap();
+    std::fs::write(&b, "\n# Target File\n\nbody\n").unwrap();
+
+    let root_uri = Url::from_directory_path(&dir).unwrap().to_string();
+    let a_uri = Url::from_file_path(&a).unwrap().to_string();
+    let link_col = doc_a.lines().nth(2).unwrap().find("b.dj").unwrap() as i64;
+    let msgs = [
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{},"processId":null,"rootUri":root_uri}}),
+        json!({"jsonrpc":"2.0","method":"initialized","params":{}}),
+        json!({"jsonrpc":"2.0","id":2,"method":"textDocument/hover",
+               "params":{"textDocument":{"uri":a_uri},"position":{"line":2,"character":link_col}}}),
+        json!({"jsonrpc":"2.0","id":99,"method":"shutdown","params":null}),
+        json!({"jsonrpc":"2.0","method":"exit","params":null}),
+    ];
+
+    let responses = run_session(&msgs);
+    let value = hover_value(&responses, 2);
+
+    assert!(value.contains("**File**"));
+    assert!(value.contains("`b.dj:2`"));
+    assert!(value.contains("# Target File"));
+}
+
+#[test]
 fn hover_shows_explicit_anchor_target() {
     let doc = "# A\n\nsee [note](#important-note)\n\n{#important-note}\nImportant text.\n";
     let msgs = [
