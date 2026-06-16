@@ -24,8 +24,10 @@ This is a **Cargo workspace** (`crates/*`) so the djot semantics can be shared b
 `README.md` is generated from `README.dj` by this project's own exporter; do not edit it by hand. Regenerate after editing `README.dj`:
 
 ```
-djot-export README.dj | pandoc -f json -t gfm --lua-filter=dev/strip-sections.lua > README.md
+djot-export README.dj | pandoc -f json -t gfm --lua-filter=dev/title-heading.lua --lua-filter=dev/strip-sections.lua > README.md
 ```
+
+`dev/title-heading.lua` turns the metadata `title` into the document's single H1 and demotes the other headings; `dev/strip-sections.lua` unwraps djot's implicit `<section>` divs.
 
 ## Build gotcha: do not bump tokio
 
@@ -39,7 +41,7 @@ Implication: **whenever you advertise a capability that causes editors to send a
 
 ## Architecture
 
-Two crates in a workspace, split along a deliberate boundary: **`djot-core` is protocol-agnostic and works in byte offsets only**; **`djot-ls` owns everything LSP** (lsp_types, async-lsp, UTF-16 positions). The planned exporter will reuse `djot-core` without pulling in any LSP types.
+Three crates in a workspace, split along a deliberate boundary: **`djot-core` is protocol-agnostic and works in byte offsets only**; **`djot-ls` owns everything LSP** (lsp_types, async-lsp, UTF-16 positions); **`djot-export` owns the pandoc AST**. Both binaries reuse `djot-core` without pulling in each other's types.
 
 `crates/djot-core/src/lib.rs` (lib, depends only on `jotdown`):
 
@@ -51,7 +53,7 @@ Two crates in a workspace, split along a deliberate boundary: **`djot-core` is p
 `crates/djot-export/src/main.rs` (bin `djot-export`, depends on `djot-core` + `jotdown` + `serde_json`):
 
 - Reads djot (file arg or stdin) and prints a pandoc JSON AST (`pandoc-api-version` `[1,23,1,1]`). Walks jotdown events with a `Frame` stack, mapping containers to pandoc nodes (sections → `Div`, headings → `Header`, lists, emphasis/strong, links, inline/fenced code, …); unhandled containers are spliced through so output stays valid. Covers a common subset only.
-- The conversion is **where conventions become export semantics**: a `{.metadata}` code block (detected via `djot_core::has_class`/`METADATA_CLASS`) is dropped from the body instead of rendered — the TODO is to fold `djot_core::metadata_block` into pandoc `Meta`.
+- The conversion is **where conventions become export semantics**: a `{.metadata}` code block (via `djot_core::metadata_block`) is parsed as toml and folded into pandoc `Meta` (`build_meta`/`toml_to_meta`) instead of rendered in the body, so its information is preserved rather than dropped.
 - Verify with a round-trip: `printf '# H\n' | ./target/debug/djot-export | pandoc -f json -t markdown`.
 
 `crates/djot-ls/src/main.rs` (bin `djot-ls`, depends on `djot-core`):

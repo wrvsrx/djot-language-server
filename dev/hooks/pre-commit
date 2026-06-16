@@ -24,12 +24,14 @@ cargo build -q -p djot-export
 
 gen() {
     ./target/debug/djot-export README.dj \
-        | pandoc -f json -t gfm --lua-filter=dev/strip-sections.lua
+        | pandoc -f json -t gfm \
+            --lua-filter=dev/title-heading.lua \
+            --lua-filter=dev/strip-sections.lua
 }
 
 if ! gen | diff - README.md >/dev/null; then
     echo "pre-commit: README.md is out of date with README.dj. Regenerate it:" >&2
-    echo "  djot-export README.dj | pandoc -f json -t gfm --lua-filter=dev/strip-sections.lua > README.md" >&2
+    echo "  djot-export README.dj | pandoc -f json -t gfm --lua-filter=dev/title-heading.lua --lua-filter=dev/strip-sections.lua > README.md" >&2
     echo "  git add README.md" >&2
     exit 1
 fi
