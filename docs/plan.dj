@@ -67,6 +67,3 @@ title = "..."
   class (`djot_core::metadata_block` / `has_class`)
 - [x] parse its contents as toml (done in `djot-export`'s `build_meta`; hover
   needs a display form rather than the pandoc `Meta` map)
-- [ ] metadata hover: show the parsed fields as the hover contents
-- [ ] metadata hover target: should it be the metadata block
-  itself, the document title, or anywhere in the document?
