@@ -32,6 +32,16 @@ title = "plan"
 - [ ] `textDocument/formatting`?
 - [ ] backward reference
 
+# Export
+
+`djot-export`: djot -> pandoc JSON AST (`djot-export doc.dj | pandoc -f json ...`).
+
+- [x] common block/inline subset -> pandoc nodes
+- [x] fold `{.metadata}` toml into pandoc `Meta` (preserved, not dropped)
+- [ ] broaden coverage: tables, footnotes, definition lists, images,
+  attribute (id/class) passthrough
+- [ ] richer metadata: render `author`/`date` (e.g. a byline), nested tables
+
 # Plan
 
 ## jump to links
@@ -55,9 +65,10 @@ title = "..."
 ```
 ````
 
-1. on parse, detect a leading code block whose attributes contain the
-   `metadata` class
-1. parse its contents as toml
-1. on hover, show the parsed fields as the hover contents
-1. open question: what should the hover target be -- the metadata block itself,
-   the document title, or anywhere in the document?
+- [x] detect a leading code block whose attributes contain the `metadata`
+  class (`djot_core::metadata_block` / `has_class`)
+- [x] parse its contents as toml (done in `djot-export`'s `build_meta`; hover
+  needs a display form rather than the pandoc `Meta` map)
+- [ ] on hover, show the parsed fields as the hover contents
+- [ ] open question: what should the hover target be -- the metadata block
+  itself, the document title, or anywhere in the document?
