@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::ops::{ControlFlow, Range as ByteRange};
 use std::path::{Path, PathBuf};
 
@@ -8,20 +9,23 @@ use async_lsp::router::Router;
 use async_lsp::server::LifecycleLayer;
 use async_lsp::tracing::TracingLayer;
 use async_lsp::{ClientSocket, LanguageServer, ResponseError};
-use djot_core::{heading_outline, metadata_block, resolve_target, Heading, RefTarget, Workspace};
+use djot_core::{
+    heading_outline, metadata_block, resolve_target, AnalysisDiagnostic, DiagnosticKind, Heading,
+    RefTarget, Workspace,
+};
 use futures::future::BoxFuture;
 use jotdown::{Container, Event, Parser};
 use lsp_types::{
     CompletionItem, CompletionItemKind, CompletionOptions, CompletionParams, CompletionResponse,
-    CompletionTextEdit, DidChangeConfigurationParams, DidChangeTextDocumentParams,
-    DidCloseTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
-    DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams,
-    GotoDefinitionResponse, Hover, HoverContents, HoverParams, HoverProviderCapability,
-    InitializeParams, InitializeResult, InitializedParams, Location, MarkupContent, MarkupKind,
-    NumberOrString, OneOf, Position, ProgressParams, ProgressParamsValue, Range, ReferenceParams,
-    ServerCapabilities, SymbolKind, TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit,
-    Url, WorkDoneProgress, WorkDoneProgressBegin, WorkDoneProgressEnd, WorkDoneProgressOptions,
-    WorkDoneProgressReport,
+    CompletionTextEdit, Diagnostic, DiagnosticSeverity, DidChangeConfigurationParams,
+    DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
+    DidSaveTextDocumentParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
+    GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents, HoverParams,
+    HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams, Location,
+    MarkupContent, MarkupKind, NumberOrString, OneOf, Position, ProgressParams,
+    ProgressParamsValue, PublishDiagnosticsParams, Range, ReferenceParams, ServerCapabilities,
+    SymbolKind, TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit, Url, WorkDoneProgress,
+    WorkDoneProgressBegin, WorkDoneProgressEnd, WorkDoneProgressOptions, WorkDoneProgressReport,
 };
 use tower::ServiceBuilder;
 use tracing::Level;
@@ -36,6 +40,8 @@ struct ServerState {
     workspace: Workspace,
     /// Roots supplied by the LSP client during initialize.
     workspace_roots: Vec<PathBuf>,
+    /// Open buffers that should receive publishDiagnostics updates.
+    open_documents: HashSet<PathBuf>,
 }
 
 impl LanguageServer for ServerState {
@@ -80,13 +86,16 @@ impl LanguageServer for ServerState {
 
     fn initialized(&mut self, _params: InitializedParams) -> Self::NotifyResult {
         self.index_workspace_roots_with_progress();
+        self.publish_open_document_diagnostics();
         ControlFlow::Continue(())
     }
 
     fn did_open(&mut self, params: DidOpenTextDocumentParams) -> Self::NotifyResult {
         let doc = params.text_document;
         if let Ok(path) = doc.uri.to_file_path() {
-            self.workspace.insert(path, doc.text);
+            self.workspace.insert(path.clone(), doc.text);
+            self.open_documents.insert(path);
+            self.publish_open_document_diagnostics();
         }
         ControlFlow::Continue(())
     }
@@ -96,6 +105,7 @@ impl LanguageServer for ServerState {
         if let Some(change) = params.content_changes.into_iter().last() {
             if let Ok(path) = params.text_document.uri.to_file_path() {
                 self.workspace.insert(path, change.text);
+                self.publish_open_document_diagnostics();
             }
         }
         ControlFlow::Continue(())
@@ -103,6 +113,8 @@ impl LanguageServer for ServerState {
 
     fn did_close(&mut self, params: DidCloseTextDocumentParams) -> Self::NotifyResult {
         if let Ok(path) = params.text_document.uri.to_file_path() {
+            self.open_documents.remove(&path);
+            self.clear_diagnostics_for(&path);
             // Drop the open-buffer text. For workspace files, keep the disk
             // version indexed so cross-file lookups and references remain
             // available after the editor closes the buffer.
@@ -115,6 +127,7 @@ impl LanguageServer for ServerState {
             } else {
                 self.workspace.remove(&path);
             }
+            self.publish_open_document_diagnostics();
         }
         ControlFlow::Continue(())
     }
@@ -241,6 +254,48 @@ impl ServerState {
             .notify::<lsp_types::notification::Progress>(ProgressParams {
                 token: NumberOrString::String("djot-ls-index".to_string()),
                 value: ProgressParamsValue::WorkDone(progress),
+            });
+    }
+
+    fn publish_open_document_diagnostics(&self) {
+        for path in &self.open_documents {
+            self.publish_diagnostics_for(path);
+        }
+    }
+
+    fn publish_diagnostics_for(&self, path: &Path) {
+        let Some(entry) = self.workspace.get(path) else {
+            return;
+        };
+        let Some(uri) = Url::from_file_path(path).ok() else {
+            return;
+        };
+        let diagnostics = self
+            .workspace
+            .diagnostics_for(path)
+            .into_iter()
+            .map(|diagnostic| to_lsp_diagnostic(&entry.text, diagnostic))
+            .collect();
+
+        let _ = self
+            .client
+            .notify::<lsp_types::notification::PublishDiagnostics>(PublishDiagnosticsParams {
+                uri,
+                diagnostics,
+                version: None,
+            });
+    }
+
+    fn clear_diagnostics_for(&self, path: &Path) {
+        let Some(uri) = Url::from_file_path(path).ok() else {
+            return;
+        };
+        let _ = self
+            .client
+            .notify::<lsp_types::notification::PublishDiagnostics>(PublishDiagnosticsParams {
+                uri,
+                diagnostics: Vec::new(),
+                version: None,
             });
     }
 
@@ -751,6 +806,30 @@ fn completion_item(
     }
 }
 
+fn to_lsp_diagnostic(text: &str, diagnostic: AnalysisDiagnostic) -> Diagnostic {
+    let (code, message) = match diagnostic.kind {
+        DiagnosticKind::UnresolvedAnchor { id } => {
+            ("unresolved-anchor", format!("Unresolved anchor `{}`", id))
+        }
+        DiagnosticKind::UnresolvedPath { path } => (
+            "unresolved-path",
+            format!("Unresolved Djot path `{}`", path),
+        ),
+    };
+
+    Diagnostic {
+        range: byte_range_to_lsp(text, &diagnostic.range),
+        severity: Some(DiagnosticSeverity::WARNING),
+        code: Some(NumberOrString::String(code.to_string())),
+        code_description: None,
+        source: Some("djot-ls".to_string()),
+        message,
+        related_information: None,
+        tags: None,
+        data: None,
+    }
+}
+
 fn document_title(text: &str) -> Option<String> {
     let metadata = metadata_block(text)?;
     let value: toml::Value = toml::from_str(&metadata).ok()?;
@@ -952,6 +1031,7 @@ async fn main() {
                 client,
                 workspace: Workspace::new(),
                 workspace_roots: Vec::new(),
+                open_documents: HashSet::new(),
             }))
     });
 

@@ -20,10 +20,10 @@ title = "plan"
 
   - [x] links/anchors: show target kind, id, path:line, and source preview
 
-- [ ] `textDocument/diagnostic`
+- [x] `textDocument/diagnostic`
 
-  - [ ] unresolved internal anchors
-  - [ ] unresolved cross-file anchors / paths
+  - [x] unresolved internal anchors
+  - [x] unresolved cross-file anchors / paths
 
 - [x] `textDocument/completion`
 
