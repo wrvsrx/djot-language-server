@@ -97,13 +97,16 @@ Both binaries reuse `djot-core` without pulling in each other's types.
 `crates/djot-ls/src/main.rs` (bin `djot-ls`, depends on `djot-core`):
 
 - `ServerState` holds `client: ClientSocket` and a `djot_core::Workspace` (path-keyed parsed documents). Because the omni-trait gives handlers `&mut self`, the index needs **no locking** — this is the main reason async-lsp was chosen over tower-lsp. URIs are mapped to/from paths with `Url::to_file_path`/`from_file_path` (file URIs only for now).
-- Text sync is **FULL** (`TextDocumentSyncKind::FULL`): `did_change` reparses the whole document into the workspace; `did_close` drops the buffer (a later lookup re-reads from disk).
+- Text sync is **FULL** (`TextDocumentSyncKind::FULL`): `did_change`
+  reparses the whole document into the workspace; `did_close` restores the
+  disk-indexed version for workspace files and removes non-workspace buffers.
 - Advertised capabilities are currently `textDocument/documentSymbol`,
   `textDocument/definition`, and `textDocument/references`.
-- On initialize, `djot-ls` indexes `.dj` / `.djot` files under
-  client-provided `workspaceFolders`, falling back to `rootUri` for older
-  clients. With no client root, it indexes only opened buffers and lazily loaded
-  definition targets.
+- `initialize` records client-provided `workspaceFolders`, falling back to
+  `rootUri` for older clients. `initialized` then indexes `.dj` / `.djot` files
+  under those roots and reports work-done progress with `$/progress`. With no
+  client root, it indexes only opened buffers and lazily loaded definition
+  targets.
 - `document_symbol` calls `heading_outline` on the stored text then maps each `Heading` to `DocumentSymbol`; `definition` (`resolve_definition`) hit-tests the cursor against link spans via the workspace, `resolve_target`s the link, lazily loads a cross-file target from disk if unseen, and returns the anchor's `Location`. Same-file and cross-file links go through the same path; external URLs return nothing. `references` resolves either the anchor or link under the cursor, then returns locations from `Workspace::references_to`, optionally including the anchor declaration.
 - `offset_to_position`/`position_to_offset` convert between byte offsets and LSP `Position` (UTF-16 columns) — O(n) per call, fine for now, worth precomputing line starts if it shows up in profiles.
 - `main()` wires the tower middleware stack (`Tracing`/`Lifecycle`/`CatchUnwind`/`Concurrency`/`ClientProcessMonitor`) around the router and runs `run_buffered` over real async stdio (`PipeStdin/PipeStdout::lock_tokio`). Tracing goes to **stderr** (stdout is the LSP transport).

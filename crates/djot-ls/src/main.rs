@@ -14,8 +14,10 @@ use lsp_types::{
     DidChangeConfigurationParams, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
     DidOpenTextDocumentParams, DidSaveTextDocumentParams, DocumentSymbol, DocumentSymbolParams,
     DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse, InitializeParams,
-    InitializeResult, Location, OneOf, Position, Range, ReferenceParams, ServerCapabilities,
-    SymbolKind, TextDocumentSyncCapability, TextDocumentSyncKind, Url,
+    InitializeResult, InitializedParams, Location, NumberOrString, OneOf, Position, ProgressParams,
+    ProgressParamsValue, Range, ReferenceParams, ServerCapabilities, SymbolKind,
+    TextDocumentSyncCapability, TextDocumentSyncKind, Url, WorkDoneProgress, WorkDoneProgressBegin,
+    WorkDoneProgressEnd, WorkDoneProgressReport,
 };
 use tower::ServiceBuilder;
 use tracing::Level;
@@ -41,9 +43,6 @@ impl LanguageServer for ServerState {
         params: InitializeParams,
     ) -> BoxFuture<'static, Result<InitializeResult, Self::Error>> {
         self.workspace_roots = workspace_roots(&params);
-        for root in self.workspace_roots.clone() {
-            self.index_workspace_root(&root);
-        }
 
         Box::pin(async move {
             Ok(InitializeResult {
@@ -60,6 +59,11 @@ impl LanguageServer for ServerState {
                 server_info: None,
             })
         })
+    }
+
+    fn initialized(&mut self, _params: InitializedParams) -> Self::NotifyResult {
+        self.index_workspace_roots_with_progress();
+        ControlFlow::Continue(())
     }
 
     fn did_open(&mut self, params: DidOpenTextDocumentParams) -> Self::NotifyResult {
@@ -157,16 +161,52 @@ impl LanguageServer for ServerState {
 }
 
 impl ServerState {
-    fn index_workspace_root(&mut self, root: &Path) {
+    fn index_workspace_root(&mut self, root: &Path) -> usize {
         index_djot_files(root, &mut |path, text| {
             self.workspace.insert(path, text);
-        });
+        })
     }
 
     fn is_in_workspace(&self, path: &Path) -> bool {
         self.workspace_roots
             .iter()
             .any(|root| path.starts_with(root))
+    }
+
+    fn index_workspace_roots_with_progress(&mut self) {
+        if self.workspace_roots.is_empty() {
+            return;
+        }
+
+        self.notify_index_progress(WorkDoneProgress::Begin(WorkDoneProgressBegin {
+            title: "Indexing Djot workspace".to_string(),
+            cancellable: Some(false),
+            message: Some("Scanning .dj/.djot files".to_string()),
+            percentage: None,
+        }));
+
+        let mut indexed = 0usize;
+        for root in self.workspace_roots.clone() {
+            indexed += self.index_workspace_root(&root);
+        }
+
+        self.notify_index_progress(WorkDoneProgress::Report(WorkDoneProgressReport {
+            cancellable: Some(false),
+            message: Some(format!("Indexed {indexed} files")),
+            percentage: None,
+        }));
+        self.notify_index_progress(WorkDoneProgress::End(WorkDoneProgressEnd {
+            message: Some(format!("Indexed {indexed} Djot files")),
+        }));
+    }
+
+    fn notify_index_progress(&self, progress: WorkDoneProgress) {
+        let _ = self
+            .client
+            .notify::<lsp_types::notification::Progress>(ProgressParams {
+                token: NumberOrString::String("djot-ls-index".to_string()),
+                value: ProgressParamsValue::WorkDone(progress),
+            });
     }
 
     /// Resolve goto-definition for the link under `position` in `uri`. Same-file
@@ -372,11 +412,12 @@ fn workspace_roots(params: &InitializeParams) -> Vec<PathBuf> {
     }
 }
 
-fn index_djot_files(root: &Path, insert: &mut impl FnMut(PathBuf, String)) {
+fn index_djot_files(root: &Path, insert: &mut impl FnMut(PathBuf, String)) -> usize {
     let Ok(entries) = std::fs::read_dir(root) else {
-        return;
+        return 0;
     };
 
+    let mut indexed = 0;
     for entry in entries.flatten() {
         let path = entry.path();
         let Ok(file_type) = entry.file_type() else {
@@ -384,13 +425,15 @@ fn index_djot_files(root: &Path, insert: &mut impl FnMut(PathBuf, String)) {
         };
 
         if file_type.is_dir() {
-            index_djot_files(&path, insert);
+            indexed += index_djot_files(&path, insert);
         } else if file_type.is_file() && is_djot_file(&path) {
             if let Ok(text) = std::fs::read_to_string(&path) {
                 insert(path, text);
+                indexed += 1;
             }
         }
     }
+    indexed
 }
 
 fn is_djot_file(path: &Path) -> bool {

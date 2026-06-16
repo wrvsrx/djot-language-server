@@ -33,3 +33,30 @@ fn did_save_does_not_crash_the_server() {
         "server did not answer documentSymbol after didSave"
     );
 }
+
+#[test]
+fn initialized_reports_workspace_index_progress() {
+    let dir = std::env::temp_dir().join("djot-ls-progress-test");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("a.dj"), "# A\n").unwrap();
+    std::fs::write(dir.join("b.djot"), "# B\n").unwrap();
+    let root_uri = lsp_types::Url::from_directory_path(&dir)
+        .unwrap()
+        .to_string();
+
+    let msgs = [
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{},"processId":null,"rootUri":root_uri}}),
+        json!({"jsonrpc":"2.0","method":"initialized","params":{}}),
+        json!({"jsonrpc":"2.0","id":99,"method":"shutdown","params":null}),
+        json!({"jsonrpc":"2.0","method":"exit","params":null}),
+    ];
+
+    let responses = run_session(&msgs);
+    let progress_kinds = responses
+        .iter()
+        .filter(|m| m["method"] == json!("$/progress"))
+        .map(|m| m["params"]["value"]["kind"].as_str().unwrap().to_string())
+        .collect::<Vec<_>>();
+
+    assert_eq!(progress_kinds, ["begin", "report", "end"]);
+}

@@ -35,8 +35,9 @@ explicit `{#id}` attribute.
 
 Finds links that point to a heading or explicit anchor, in the same file or
 across the client-provided workspace. The server indexes `.dj` / `.djot` files
-from `workspaceFolders` (or `rootUri` as a fallback) during initialization, and
-keeps open buffers overriding the disk index while they are edited.
+from `workspaceFolders` (or `rootUri` as a fallback) after initialization,
+reports indexing progress with `$/progress`, and keeps open buffers overriding
+the disk index while they are edited.
 
 Document sync is full-text.
 
