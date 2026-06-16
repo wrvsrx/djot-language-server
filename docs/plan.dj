@@ -16,6 +16,11 @@ title = "plan"
   - [ ] jump to link in the same file
   - [ ] jump to link in another file
 
+- [ ] `textDocument/hover`
+
+  - [ ] metadata: parse a `{.metadata}`-classed toml block at the top of the
+    document and show its fields as hover content
+
 - [ ] `textDocument/diagnostic`
 - [ ] `textDocument/completion`
   
@@ -38,3 +43,21 @@ title = "plan"
 ## how to maintain links (and ast) on both active and inactive files
 
 - [ ] think about that
+
+## metadata hover
+
+The document may begin with a code block carrying the `metadata` class, e.g.
+
+````
+{.metadata}
+``` toml
+title = "..."
+```
+````
+
+1. on parse, detect a leading code block whose attributes contain the
+   `metadata` class
+1. parse its contents as toml
+1. on hover, show the parsed fields as the hover contents
+1. open question: what should the hover target be -- the metadata block itself,
+   the document title, or anywhere in the document?
