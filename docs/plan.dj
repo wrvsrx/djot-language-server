@@ -11,7 +11,7 @@ title = "plan"
   - [ ] anchor?
   - [ ] list?
 
-- [ ] `textDocument/definition`
+- [x] `textDocument/definition`
 
   - [x] jump to link in the same file
   - [x] jump to link in another file
