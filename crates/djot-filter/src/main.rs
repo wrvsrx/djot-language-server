@@ -1,10 +1,13 @@
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Component, Path, PathBuf};
-use std::process::ExitCode;
+use std::process::{Command, ExitCode};
+use std::sync::Arc;
 
 use clap::Parser;
 use djot_core::{metadata_block, resolve_target, Workspace};
 use regex::Regex;
+use skim::prelude::*;
 
 fn main() -> ExitCode {
     let config = Config::parse();
@@ -38,8 +41,21 @@ fn main() -> ExitCode {
     }
 
     paths.sort();
-    for path in paths {
-        println!("{}", display_path(&root, &path));
+    if config.interactive {
+        match run_interactive(&root, &paths, &docs.texts) {
+            Ok(selected) => {
+                if let Err(err) = open_in_editor(&root, &selected) {
+                    eprintln!("djot-filter: {err}");
+                    return ExitCode::FAILURE;
+                }
+            }
+            Err(err) => {
+                eprintln!("djot-filter: {err}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        print_paths(paths.into_iter().map(|path| display_path(&root, &path)));
     }
 
     ExitCode::SUCCESS
@@ -63,6 +79,10 @@ struct Config {
     /// With --referenced-by, keep only directly referenced files.
     #[arg(long)]
     direct: bool,
+
+    /// Re-filter results interactively with skim.
+    #[arg(short, long)]
+    interactive: bool,
 
     /// Keep files whose string metadata KEY matches REGEX. May be repeated; all
     /// metadata filters must match.
@@ -95,6 +115,47 @@ struct LoadedDocs {
     workspace: Workspace,
     paths: Vec<PathBuf>,
     texts: HashMap<PathBuf, String>,
+}
+
+#[derive(Clone)]
+struct FilterItem {
+    path: String,
+    searchable: String,
+    preview: String,
+}
+
+impl FilterItem {
+    fn new(path: String, text: String) -> Self {
+        let searchable = format!("{path}\n{text}");
+        let preview = Self::preview_text(&path, &text);
+        Self {
+            path,
+            searchable,
+            preview,
+        }
+    }
+
+    fn preview_text(path: &str, text: &str) -> String {
+        format!("{path}\n{}\n{text}", "-".repeat(path.len()))
+    }
+}
+
+impl SkimItem for FilterItem {
+    fn text(&self) -> Cow<'_, str> {
+        Cow::Borrowed(&self.searchable)
+    }
+
+    fn display<'a>(&'a self, _context: DisplayContext<'a>) -> AnsiString<'a> {
+        AnsiString::parse(&self.path)
+    }
+
+    fn preview(&self, _context: PreviewContext) -> ItemPreview {
+        ItemPreview::Text(self.preview.clone())
+    }
+
+    fn output(&self) -> Cow<'_, str> {
+        Cow::Borrowed(&self.path)
+    }
 }
 
 fn load_docs(root: &Path) -> Result<LoadedDocs, String> {
@@ -204,6 +265,94 @@ fn metadata_string<'a>(table: &'a toml::Table, key: &str) -> Option<&'a str> {
         value = value.as_table()?.get(part)?;
     }
     value.as_str()
+}
+
+fn run_interactive(
+    root: &Path,
+    paths: &[PathBuf],
+    texts: &HashMap<PathBuf, String>,
+) -> Result<Vec<String>, String> {
+    let options = SkimOptionsBuilder::default()
+        .height(Some("100%"))
+        .multi(true)
+        .preview(Some(""))
+        .build()
+        .map_err(|err| err.to_string())?;
+    let (sender, receiver): (SkimItemSender, SkimItemReceiver) = unbounded();
+
+    for path in paths {
+        let Some(text) = texts.get(path) else {
+            continue;
+        };
+        let item = FilterItem::new(display_path(root, path), text.clone());
+        sender
+            .send(Arc::new(item))
+            .map_err(|err| format!("cannot send item to skim: {err}"))?;
+    }
+    drop(sender);
+
+    let output = Skim::run_with(&options, Some(receiver));
+    let Some(output) = output else {
+        return Ok(Vec::new());
+    };
+
+    Ok(output
+        .selected_items
+        .into_iter()
+        .map(|item| item.output().into_owned())
+        .collect())
+}
+
+fn open_in_editor(root: &Path, selected: &[String]) -> Result<(), String> {
+    if selected.is_empty() {
+        return Ok(());
+    }
+
+    let editor = std::env::var("EDITOR")
+        .map_err(|_| "--interactive selected files, but EDITOR is not set".to_string())?;
+    let (program, args) = editor_command(&editor)?;
+    let paths = editor_paths(root, selected);
+    let status = Command::new(&program)
+        .args(args)
+        .args(paths)
+        .status()
+        .map_err(|err| format!("cannot run editor `{program}`: {err}"))?;
+
+    if !status.success() {
+        return Err(format!("editor `{program}` exited with {status}"));
+    }
+
+    Ok(())
+}
+
+fn editor_command(editor: &str) -> Result<(String, Vec<String>), String> {
+    let mut parts =
+        shlex::split(editor).ok_or_else(|| format!("cannot parse EDITOR={editor:?}"))?;
+    if parts.is_empty() {
+        return Err("EDITOR is empty".to_string());
+    }
+    let program = parts.remove(0);
+    Ok((program, parts))
+}
+
+fn editor_paths(root: &Path, selected: &[String]) -> Vec<PathBuf> {
+    selected
+        .iter()
+        .map(|path| {
+            let path = Path::new(path);
+            if path.is_absolute() {
+                normalize(path)
+            } else {
+                normalize(&root.join(path))
+            }
+        })
+        .collect()
+}
+
+fn print_paths(paths: impl IntoIterator<Item = String>) {
+    for path in paths {
+        println!("{path}");
+    }
 }
 
 fn absolute_path(path: &Path) -> PathBuf {
@@ -320,9 +469,44 @@ mod tests {
             root: None,
             referenced_by: Vec::new(),
             direct: false,
+            interactive: false,
             metadata_filters: Vec::new(),
         };
         assert_eq!(default_root(&config), absolute_path(Path::new(".")));
+    }
+
+    #[test]
+    fn filter_item_searches_full_text_but_outputs_path() {
+        let item = FilterItem::new(
+            "notes/topic.dj".to_string(),
+            "# Topic\nbody text\n".to_string(),
+        );
+
+        assert_eq!(item.output(), "notes/topic.dj");
+        assert!(item.text().contains("notes/topic.dj"));
+        assert!(item.text().contains("body text"));
+
+        let preview = FilterItem::preview_text("notes/topic.dj", "# Topic\nbody text\n");
+        assert!(preview.contains("notes/topic.dj"));
+        assert!(preview.contains("# Topic"));
+    }
+
+    #[test]
+    fn editor_command_supports_arguments() {
+        let (program, args) = editor_command("nvim -p").unwrap();
+        assert_eq!(program, "nvim");
+        assert_eq!(args, vec!["-p"]);
+
+        let (program, args) = editor_command("'code editor' --wait").unwrap();
+        assert_eq!(program, "code editor");
+        assert_eq!(args, vec!["--wait"]);
+    }
+
+    #[test]
+    fn editor_paths_are_root_relative_and_keep_spaces() {
+        let root = normalize(Path::new("/tmp/djot-filter-root"));
+        let paths = editor_paths(&root, &["other file.dj".to_string()]);
+        assert_eq!(paths, vec![root.join("other file.dj")]);
     }
 
     fn unique_test_dir(name: &str) -> PathBuf {

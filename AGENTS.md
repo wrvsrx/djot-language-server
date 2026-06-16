@@ -109,8 +109,15 @@ All binaries reuse `djot-core` without pulling in each other's types.
   scan root. `--direct` restricts this to only direct references.
 - `--metadata KEY=REGEX` keeps documents whose leading metadata block has a
   string metadata value matching the regex. Dotted keys traverse TOML tables.
+- `--interactive` opens the filtered results in skim. Each item displays and
+  outputs the root-relative path, matches against `path + full text`, and uses
+  an in-memory preview of the file content instead of a shell preview command.
+  When the user accepts a selection, `djot-filter` opens selected files with
+  `$EDITOR`; editor arguments are parsed with `shlex` and file paths are passed
+  as direct process arguments so spaces are preserved.
 - Unit tests live in the same file and cover metadata filtering, transitive
-  references, dotted metadata keys, and seed path normalization.
+  references, dotted metadata keys, seed path normalization, and skim item
+  behavior.
 
 `crates/djot-ls/src/main.rs` (bin `djot-ls`, depends on `djot-core`):
 

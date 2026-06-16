@@ -8,4 +8,6 @@ license.workspace = true
 clap.workspace = true
 djot-core = { path = "../djot-core" }
 regex.workspace = true
+shlex.workspace = true
+skim.workspace = true
 toml.workspace = true
