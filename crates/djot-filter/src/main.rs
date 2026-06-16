@@ -52,6 +52,7 @@ fn main() -> ExitCode {
 )]
 struct Config {
     /// Directory to scan recursively. Defaults to the current directory.
+    #[arg(long, value_name = "DIR")]
     root: Option<PathBuf>,
 
     /// Keep files directly or indirectly referenced by FILE. May be repeated;

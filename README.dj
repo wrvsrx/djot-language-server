@@ -70,9 +70,9 @@ match all filters. If no directory is given, it scans the current directory:
 
 ``` sh
 djot-filter --metadata 'title=semantics'
-djot-filter docs --metadata 'title=semantics'
-djot-filter notes --referenced-by index.dj
-djot-filter notes --referenced-by index.dj --direct
+djot-filter --root docs --metadata 'title=semantics'
+djot-filter --root notes --referenced-by index.dj
+djot-filter --root notes --referenced-by index.dj --direct
 ```
 
 `--referenced-by` keeps files directly or indirectly referenced by one or more
