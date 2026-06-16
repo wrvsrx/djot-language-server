@@ -22,6 +22,8 @@ This is a **Cargo workspace** (`crates/*`) so the djot semantics can be shared b
 - `crates/djot-export/` is the `djot-export` CLI.
 - `crates/djot-filter/` is the `djot-filter` CLI.
 - `docs/plan.dj` is the feature roadmap.
+- `default.nix` packages the workspace binaries as the `djot-tools` Nix
+  package. The version is read from `Cargo.toml` with `builtins.fromTOML`.
 - `examples/*.dj` are small manual test fixtures for outlines, links, and
   article-style documents.
 - `dev/` contains editor/dev helpers: Neovim LSP config, README export Lua
@@ -40,8 +42,11 @@ This is a **Cargo workspace** (`crates/*`) so the djot semantics can be shared b
 - Test the exporter only: `cargo test -p djot-export`
 - Test the filter only: `cargo test -p djot-filter`
 - Run exporter manually: `printf '# H\n' | cargo run -p djot-export -- | pandoc -f json -t markdown`
-- Run filter manually: `cargo run -p djot-filter -- docs --metadata 'title=semantics'`
-- Filter referenced docs: `cargo run -p djot-filter -- notes --referenced-by index.dj --direct`
+- Run filter manually: `cargo run -p djot-filter -- --root docs --metadata 'title=semantics'`
+- Filter referenced docs: `cargo run -p djot-filter -- --root notes --referenced-by index.dj --direct`
+- Build the Nix package: `nix build .` (flake) or `nix-build` (default.nix);
+  the package name is `djot-tools` and installs `djot-ls`, `djot-export`, and
+  `djot-filter`.
 - The dev environment is a Nix flake (`use_flake .` via direnv); `dev/envrc` is symlinked to the repo-root `.envrc`.
 - Git hooks live in `dev/hooks/`; enable them once per clone with `git config core.hooksPath dev/hooks`. The `pre-commit` hook checks that `README.md` is still in sync with `README.dj` whenever either is committed.
 
@@ -99,7 +104,7 @@ All binaries reuse `djot-core` without pulling in each other's types.
   metadata-body removal.
 - Verify with a round-trip: `printf '# H\n' | ./target/debug/djot-export | pandoc -f json -t markdown`.
 
-`crates/djot-filter/src/main.rs` (bin `djot-filter`, depends on `djot-core` + `clap` + `regex` + `toml`):
+`crates/djot-filter/src/main.rs` (bin `djot-filter`, depends on `djot-core` + `clap` + `regex` + `shlex` + `skim` + `toml`):
 
 - Recursively scans a root directory for `.dj` / `.djot` files, loads them into
   `djot_core::Workspace`, and prints root-relative paths that match all
