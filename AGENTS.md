@@ -17,6 +17,15 @@ This is a **Cargo workspace** (`crates/*`) so the djot semantics can be shared b
 - Run one test: `cargo test -p djot-ls --test document_symbol did_save_does_not_crash_the_server`
 - Test the core lib only: `cargo test -p djot-core`
 - The dev environment is a Nix flake (`use_flake .` via direnv); `dev/envrc` is symlinked to the repo-root `.envrc`.
+- Git hooks live in `dev/hooks/`; enable them once per clone with `git config core.hooksPath dev/hooks`. The `pre-commit` hook checks that `README.md` is still in sync with `README.dj` whenever either is committed.
+
+## Generated README
+
+`README.md` is generated from `README.dj` by this project's own exporter; do not edit it by hand. Regenerate after editing `README.dj`:
+
+```
+djot-export README.dj | pandoc -f json -t gfm --lua-filter=dev/strip-sections.lua > README.md
+```
 
 ## Build gotcha: do not bump tokio
 
