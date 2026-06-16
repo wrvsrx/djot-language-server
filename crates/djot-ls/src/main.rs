@@ -1,4 +1,4 @@
-use std::ops::ControlFlow;
+use std::ops::{ControlFlow, Range as ByteRange};
 use std::path::{Path, PathBuf};
 
 use async_lsp::client_monitor::ClientProcessMonitorLayer;
@@ -8,17 +8,20 @@ use async_lsp::router::Router;
 use async_lsp::server::LifecycleLayer;
 use async_lsp::tracing::TracingLayer;
 use async_lsp::{ClientSocket, LanguageServer, ResponseError};
-use djot_core::{heading_outline, resolve_target, Heading, Workspace};
+use djot_core::{heading_outline, metadata_block, resolve_target, Heading, Workspace};
 use futures::future::BoxFuture;
+use jotdown::{Container, Event, Parser};
 use lsp_types::{
-    DidChangeConfigurationParams, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
-    DidOpenTextDocumentParams, DidSaveTextDocumentParams, DocumentSymbol, DocumentSymbolParams,
-    DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents,
-    HoverParams, HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams,
-    Location, MarkupContent, MarkupKind, NumberOrString, OneOf, Position, ProgressParams,
-    ProgressParamsValue, Range, ReferenceParams, ServerCapabilities, SymbolKind,
-    TextDocumentSyncCapability, TextDocumentSyncKind, Url, WorkDoneProgress, WorkDoneProgressBegin,
-    WorkDoneProgressEnd, WorkDoneProgressReport,
+    CompletionItem, CompletionItemKind, CompletionOptions, CompletionParams, CompletionResponse,
+    CompletionTextEdit, DidChangeConfigurationParams, DidChangeTextDocumentParams,
+    DidCloseTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
+    DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams,
+    GotoDefinitionResponse, Hover, HoverContents, HoverParams, HoverProviderCapability,
+    InitializeParams, InitializeResult, InitializedParams, Location, MarkupContent, MarkupKind,
+    NumberOrString, OneOf, Position, ProgressParams, ProgressParamsValue, Range, ReferenceParams,
+    ServerCapabilities, SymbolKind, TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit,
+    Url, WorkDoneProgress, WorkDoneProgressBegin, WorkDoneProgressEnd, WorkDoneProgressOptions,
+    WorkDoneProgressReport,
 };
 use tower::ServiceBuilder;
 use tracing::Level;
@@ -56,6 +59,18 @@ impl LanguageServer for ServerState {
                     definition_provider: Some(OneOf::Left(true)),
                     references_provider: Some(OneOf::Left(true)),
                     hover_provider: Some(HoverProviderCapability::Simple(true)),
+                    completion_provider: Some(CompletionOptions {
+                        resolve_provider: Some(false),
+                        trigger_characters: Some(vec![
+                            "[".to_string(),
+                            "(".to_string(),
+                            "/".to_string(),
+                            "#".to_string(),
+                        ]),
+                        all_commit_characters: None,
+                        work_done_progress_options: WorkDoneProgressOptions::default(),
+                        completion_item: None,
+                    }),
                     ..ServerCapabilities::default()
                 },
                 server_info: None,
@@ -168,6 +183,15 @@ impl LanguageServer for ServerState {
         let pos = params.text_document_position_params;
         let hover = self.resolve_hover(&pos.text_document.uri, pos.position);
         Box::pin(async move { Ok(hover) })
+    }
+
+    fn completion(
+        &mut self,
+        params: CompletionParams,
+    ) -> BoxFuture<'static, Result<Option<CompletionResponse>, Self::Error>> {
+        let pos = params.text_document_position;
+        let completions = self.resolve_completion(&pos.text_document.uri, pos.position);
+        Box::pin(async move { Ok(completions.map(CompletionResponse::Array)) })
     }
 }
 
@@ -362,6 +386,74 @@ impl ServerState {
         })
     }
 
+    fn resolve_completion(&self, uri: &Url, position: Position) -> Option<Vec<CompletionItem>> {
+        let from = uri.to_file_path().ok()?;
+        let entry = self.workspace.get(&from)?;
+        let offset = position_to_offset(&entry.text, position);
+        let context = link_completion_context(&entry.text, offset)?;
+
+        let items = match context {
+            LinkCompletionContext::Label { replace, query } => self
+                .workspace_link_targets(&from)
+                .into_iter()
+                .filter(|target| {
+                    fuzzy_match(&query, &target.title) || fuzzy_match(&query, &target.path)
+                })
+                .map(|target| {
+                    completion_item(
+                        target.title.clone(),
+                        Some(target.path.clone()),
+                        format!(
+                            "[{}]({})",
+                            escape_link_label(&target.title),
+                            escape_link_destination(&target.path)
+                        ),
+                        &entry.text,
+                        &replace,
+                    )
+                })
+                .collect(),
+            LinkCompletionContext::Destination { replace, query } => self
+                .workspace_link_targets(&from)
+                .into_iter()
+                .filter(|target| {
+                    fuzzy_match(&query, &target.path) || fuzzy_match(&query, &target.title)
+                })
+                .map(|target| {
+                    completion_item(
+                        target.path.clone(),
+                        Some(target.title.clone()),
+                        escape_link_destination(&target.path),
+                        &entry.text,
+                        &replace,
+                    )
+                })
+                .collect(),
+        };
+
+        Some(items)
+    }
+
+    fn workspace_link_targets(&self, from: &Path) -> Vec<LinkTargetCompletion> {
+        let mut targets: Vec<_> = self
+            .workspace
+            .documents()
+            .map(|(path, entry)| {
+                let path =
+                    relative_link_path(from, path).unwrap_or_else(|| self.display_path(path));
+                let title = document_title(&entry.text).unwrap_or_else(|| path.clone());
+                LinkTargetCompletion { title, path }
+            })
+            .collect();
+        targets.sort_by(|a, b| {
+            a.title
+                .to_lowercase()
+                .cmp(&b.title.to_lowercase())
+                .then_with(|| a.path.cmp(&b.path))
+        });
+        targets
+    }
+
     fn display_path(&self, path: &Path) -> String {
         self.workspace_roots
             .iter()
@@ -370,6 +462,216 @@ impl ServerState {
             .display()
             .to_string()
     }
+}
+
+#[derive(Debug, Clone)]
+struct LinkTargetCompletion {
+    title: String,
+    path: String,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum LinkCompletionContext {
+    Label {
+        replace: ByteRange<usize>,
+        query: String,
+    },
+    Destination {
+        replace: ByteRange<usize>,
+        query: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy)]
+enum LinkScanState {
+    Text,
+    Label { open: usize },
+    AfterLabel,
+    Destination { start: usize },
+}
+
+fn link_completion_context(text: &str, offset: usize) -> Option<LinkCompletionContext> {
+    let str_span = str_event_touching_cursor(text, offset)?;
+    let prefix = &text[str_span.start..offset];
+    let mut state = LinkScanState::Text;
+
+    for (i, c) in prefix.char_indices() {
+        let absolute = str_span.start + i;
+        if is_escaped(prefix, i) {
+            continue;
+        }
+
+        state = match state {
+            LinkScanState::Text => {
+                if c == '[' {
+                    LinkScanState::Label { open: absolute }
+                } else {
+                    LinkScanState::Text
+                }
+            }
+            LinkScanState::Label { open } => {
+                if c == ']' {
+                    LinkScanState::AfterLabel
+                } else if c == '[' {
+                    LinkScanState::Label { open: absolute }
+                } else {
+                    LinkScanState::Label { open }
+                }
+            }
+            LinkScanState::AfterLabel => {
+                if c == '(' {
+                    LinkScanState::Destination {
+                        start: absolute + c.len_utf8(),
+                    }
+                } else if c == '[' {
+                    LinkScanState::Label { open: absolute }
+                } else {
+                    LinkScanState::Text
+                }
+            }
+            LinkScanState::Destination { start } => {
+                if c == ')' {
+                    LinkScanState::Text
+                } else {
+                    LinkScanState::Destination { start }
+                }
+            }
+        };
+    }
+
+    match state {
+        LinkScanState::Label { open } => Some(LinkCompletionContext::Label {
+            replace: open..offset,
+            query: text[open + 1..offset].to_string(),
+        }),
+        LinkScanState::Destination { start } => {
+            let query = &text[start..offset];
+            if query.contains('#') {
+                None
+            } else {
+                Some(LinkCompletionContext::Destination {
+                    replace: start..offset,
+                    query: query.to_string(),
+                })
+            }
+        }
+        LinkScanState::Text | LinkScanState::AfterLabel => None,
+    }
+}
+
+fn str_event_touching_cursor(text: &str, offset: usize) -> Option<ByteRange<usize>> {
+    let mut ignored_depth = 0usize;
+    for (event, span) in Parser::new(text).into_offset_iter() {
+        match event {
+            Event::Start(container, _) => {
+                if ignored_depth > 0 || ignores_completion_str(&container) {
+                    ignored_depth += 1;
+                }
+            }
+            Event::End(container) => {
+                let _ = container;
+                if ignored_depth > 0 {
+                    ignored_depth -= 1;
+                }
+            }
+            Event::Str(_) if ignored_depth == 0 && span.start <= offset && offset <= span.end => {
+                return Some(span);
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn ignores_completion_str(container: &Container<'_>) -> bool {
+    matches!(
+        container,
+        Container::Verbatim
+            | Container::CodeBlock { .. }
+            | Container::Math { .. }
+            | Container::RawInline { .. }
+            | Container::RawBlock { .. }
+            | Container::Link(_, _)
+            | Container::Image(_, _)
+    )
+}
+
+fn is_escaped(text: &str, byte_index: usize) -> bool {
+    let mut backslashes = 0;
+    for b in text[..byte_index].bytes().rev() {
+        if b == b'\\' {
+            backslashes += 1;
+        } else {
+            break;
+        }
+    }
+    backslashes % 2 == 1
+}
+
+fn completion_item(
+    label: String,
+    detail: Option<String>,
+    new_text: String,
+    source_text: &str,
+    replace: &ByteRange<usize>,
+) -> CompletionItem {
+    CompletionItem {
+        label,
+        kind: Some(CompletionItemKind::FILE),
+        detail,
+        text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(
+            byte_range_to_lsp(source_text, replace),
+            new_text,
+        ))),
+        ..CompletionItem::default()
+    }
+}
+
+fn document_title(text: &str) -> Option<String> {
+    let metadata = metadata_block(text)?;
+    let value: toml::Value = toml::from_str(&metadata).ok()?;
+    value
+        .get("title")
+        .and_then(|title| title.as_str())
+        .map(str::to_string)
+}
+
+fn relative_link_path(from: &Path, target: &Path) -> Option<String> {
+    let base = from.parent()?;
+    target
+        .strip_prefix(base)
+        .ok()
+        .map(|path| path.display().to_string())
+}
+
+fn fuzzy_match(query: &str, candidate: &str) -> bool {
+    if query.is_empty() {
+        return true;
+    }
+
+    let mut chars = query.chars().flat_map(char::to_lowercase);
+    let Some(mut needle) = chars.next() else {
+        return true;
+    };
+
+    for c in candidate.chars().flat_map(char::to_lowercase) {
+        if c == needle {
+            if let Some(next) = chars.next() {
+                needle = next;
+            } else {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn escape_link_label(value: &str) -> String {
+    value.replace('\\', "\\\\").replace(']', "\\]")
+}
+
+fn escape_link_destination(value: &str) -> String {
+    value.replace('\\', "\\\\").replace(')', "\\)")
 }
 
 fn anchor_hover_markdown(

@@ -9,3 +9,4 @@ license = "MIT"
 
 [workspace.dependencies]
 jotdown = "0.10.0"
+toml = "1.1.2"

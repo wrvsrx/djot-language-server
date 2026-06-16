@@ -27,15 +27,14 @@ title = "plan"
 
 - [ ] `textDocument/completion`
 
-  - [ ] links
-  - [ ] `[` trigger: fuzzy-search workspace files by path and metadata
+  - [x] `[` trigger: fuzzy-search workspace files by path and metadata
     `title`, then insert `[title](path)`
-  - [ ] destination triggers: complete paths inside `[text](path)` and anchors
-    inside `[text](path#anchor)`
-  - [ ] completion context parser: do not rely only on jotdown, because
-    completion often runs while the link syntax is incomplete; use a small
-    line-local parser for `[...](` / `...#...` contexts
-  - [ ] paths
+  - [x] destination path trigger: complete paths inside `[text](path)`
+  - [ ] destination anchor trigger: complete anchors inside `[text](path#anchor)`
+  - [x] completion context parser: first require the cursor to touch a jotdown
+    `Str` event outside verbatim/code/link containers, then use a small parser
+    for incomplete link syntax
+  - [x] paths
 
 - [ ] `textDocument/semanticToken/full`
 - [ ] `textDocument/semanticToken/range`?

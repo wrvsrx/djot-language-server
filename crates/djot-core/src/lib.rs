@@ -308,6 +308,13 @@ impl Workspace {
         self.docs.get(&normalize(path))
     }
 
+    /// All indexed documents.
+    pub fn documents(&self) -> impl Iterator<Item = (&Path, &DocEntry)> {
+        self.docs
+            .iter()
+            .map(|(path, entry)| (path.as_path(), entry))
+    }
+
     /// The reference whose source span covers `offset` in the document at `path`.
     pub fn reference_at(&self, path: &Path, offset: usize) -> Option<&Reference> {
         self.get(path)?
@@ -504,5 +511,48 @@ mod tests {
                 id: None
             }
         );
+    }
+
+    #[test]
+    fn jotdown_cursor_link_parsing_shapes() {
+        for (marked, expected_str) in [
+            ("[|", Some("[")),
+            ("[foo|", Some("[foo")),
+            ("[foo|]", Some("[foo]")),
+            ("[foo](|", Some("[foo](")),
+            ("[foo](|)", None),
+            ("[|]", Some("[]")),
+        ] {
+            let (text, cursor) = strip_cursor_marker(marked);
+            assert_eq!(
+                str_event_touching_cursor(&text, cursor).as_deref(),
+                expected_str,
+                "unexpected Str event at cursor for {marked:?}"
+            );
+        }
+
+        let (text, cursor) = strip_cursor_marker("[foo](|)");
+        assert!(
+            Parser::new(&text).into_offset_iter().any(|(event, span)| {
+                span.start <= cursor
+                    && cursor <= span.end
+                    && matches!(event, Event::End(Container::Link(_, _)))
+            }),
+            "cursor in a complete empty destination is in the link end syntax span"
+        );
+    }
+
+    fn strip_cursor_marker(marked: &str) -> (String, usize) {
+        let cursor = marked.find('|').expect("cursor marker");
+        (marked.replace('|', ""), cursor)
+    }
+
+    fn str_event_touching_cursor(text: &str, cursor: usize) -> Option<String> {
+        Parser::new(text)
+            .into_offset_iter()
+            .find_map(|(event, span)| match event {
+                Event::Str(s) if span.start <= cursor && cursor <= span.end => Some(s.to_string()),
+                _ => None,
+            })
     }
 }
