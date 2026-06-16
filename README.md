@@ -22,16 +22,22 @@ level, so editors show a collapsible tree of the document structure.
 Jumps from a link to the heading or anchor it points at, in the same file or
 another file. It works for explicit anchor links like `[text](#some-heading)`,
 cross-file links like `[text](other.dj#some-heading)`, and implicit heading
-references like `[Some Heading][]`. Cross-file targets are read from disk on
-demand.
+references like `[Some Heading][]`.
 
 Any element with an id is a valid jump target: headings and sections (djot
 auto-generates ids from the heading text) and any block or inline carrying an
 explicit `{#id}` attribute.
 
+### `textDocument/references`
+
+Finds links that point to a heading or explicit anchor, in the same file or
+across the client-provided workspace. The server indexes `.dj` / `.djot` files
+from `workspaceFolders` (or `rootUri` as a fallback) during initialization, and
+keeps open buffers overriding the disk index while they are edited.
+
 Document sync is full-text.
 
-More capabilities (backlinks, diagnostics, completion, semantic tokens) are
+More capabilities (diagnostics, completion, semantic tokens) are
 planned – see [`docs/plan.dj`](docs/plan.dj) for the roadmap.
 
 ## Export
@@ -78,7 +84,8 @@ points at the built binary. Server-side logs/panics surface in `:LspLog`.
 ### Other editors
 
 Any LSP client works – launch `djot-ls` and let it communicate over stdio. It
-advertises `documentSymbol` and `definition` support during `initialize`.
+advertises `documentSymbol`, `definition`, and `references` support during
+`initialize`.
 
 ## Architecture
 

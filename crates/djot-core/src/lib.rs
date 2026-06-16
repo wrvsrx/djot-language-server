@@ -133,6 +133,8 @@ pub fn heading_outline(text: &str) -> Vec<Heading> {
 pub fn build_index(text: &str) -> DocIndex {
     let mut anchors: HashMap<String, Anchor> = HashMap::new();
     let mut references = Vec::new();
+    // Stack of (id, start byte) for headings currently open.
+    let mut open_headings: Vec<(String, usize)> = Vec::new();
     // Stack of (destination, start byte) for links currently open.
     let mut open_links: Vec<(String, usize)> = Vec::new();
 
@@ -140,9 +142,7 @@ pub fn build_index(text: &str) -> DocIndex {
         match event {
             // Headings carry the (possibly auto-generated) id directly.
             Event::Start(Container::Heading { id, .. }, _) => {
-                anchors.entry(id.into_owned()).or_insert_with(|| Anchor {
-                    range: span.clone(),
-                });
+                open_headings.push((id.into_owned(), span.start));
             }
             Event::Start(container, attrs) => {
                 // Any other element with an explicit {#id} is also an anchor.
@@ -153,6 +153,13 @@ pub fn build_index(text: &str) -> DocIndex {
                 }
                 if let Container::Link(dst, _) = container {
                     open_links.push((dst.into_owned(), span.start));
+                }
+            }
+            Event::End(Container::Heading { .. }) => {
+                if let Some((id, start)) = open_headings.pop() {
+                    anchors.entry(id).or_insert_with(|| Anchor {
+                        range: start..span.end,
+                    });
                 }
             }
             Event::End(Container::Link(_, _)) => {
@@ -315,6 +322,16 @@ impl Workspace {
         self.get(path)?.index.anchors.get(id)
     }
 
+    /// The anchor whose source span covers `offset` in the document at `path`.
+    pub fn anchor_at(&self, path: &Path, offset: usize) -> Option<(&str, &Anchor)> {
+        self.get(path)?
+            .index
+            .anchors
+            .iter()
+            .find(|(_, anchor)| anchor.range.contains(&offset))
+            .map(|(id, anchor)| (id.as_str(), anchor))
+    }
+
     /// Every loaded reference that points at `(path, id)` — the basis for
     /// find-references. Scans all loaded documents (so completeness requires the
     /// caller to have loaded the whole workspace first).
@@ -464,6 +481,8 @@ mod tests {
         assert_eq!(resolved.path, b);
         assert_eq!(resolved.id.as_deref(), Some("Topic"));
         assert!(ws.anchor(&resolved.path, "Topic").is_some());
+        let topic_text_offset = ws.get(&b).unwrap().text.find("Topic").unwrap();
+        assert_eq!(ws.anchor_at(&b, topic_text_offset).unwrap().0, "Topic");
 
         // Backward: exactly one document references (b.dj, Topic).
         let back = ws.references_to(&b, "Topic");

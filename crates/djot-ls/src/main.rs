@@ -14,8 +14,8 @@ use lsp_types::{
     DidChangeConfigurationParams, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
     DidOpenTextDocumentParams, DidSaveTextDocumentParams, DocumentSymbol, DocumentSymbolParams,
     DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse, InitializeParams,
-    InitializeResult, Location, OneOf, Position, Range, ServerCapabilities, SymbolKind,
-    TextDocumentSyncCapability, TextDocumentSyncKind, Url,
+    InitializeResult, Location, OneOf, Position, Range, ReferenceParams, ServerCapabilities,
+    SymbolKind, TextDocumentSyncCapability, TextDocumentSyncKind, Url,
 };
 use tower::ServiceBuilder;
 use tracing::Level;
@@ -54,6 +54,7 @@ impl LanguageServer for ServerState {
                     )),
                     document_symbol_provider: Some(OneOf::Left(true)),
                     definition_provider: Some(OneOf::Left(true)),
+                    references_provider: Some(OneOf::Left(true)),
                     ..ServerCapabilities::default()
                 },
                 server_info: None,
@@ -140,6 +141,19 @@ impl LanguageServer for ServerState {
         let location = self.resolve_definition(&pos.text_document.uri, pos.position);
         Box::pin(async move { Ok(location.map(GotoDefinitionResponse::Scalar)) })
     }
+
+    fn references(
+        &mut self,
+        params: ReferenceParams,
+    ) -> BoxFuture<'static, Result<Option<Vec<Location>>, Self::Error>> {
+        let pos = params.text_document_position;
+        let locations = self.resolve_references(
+            &pos.text_document.uri,
+            pos.position,
+            params.context.include_declaration,
+        );
+        Box::pin(async move { Ok(locations) })
+    }
 }
 
 impl ServerState {
@@ -185,6 +199,55 @@ impl ServerState {
             uri: Url::from_file_path(&target.path).ok()?,
             range: byte_range_to_lsp(&entry.text, &range),
         })
+    }
+
+    /// Resolve find-references for either an anchor under the cursor or a link
+    /// under the cursor. Only anchored targets (`#id` / `path#id`) have
+    /// references; file-only links do not name a symbol.
+    fn resolve_references(
+        &mut self,
+        uri: &Url,
+        position: Position,
+        include_declaration: bool,
+    ) -> Option<Vec<Location>> {
+        let from = uri.to_file_path().ok()?;
+        let offset = position_to_offset(&self.workspace.get(&from)?.text, position);
+        let (target_path, target_id) = self.reference_target_at(&from, offset)?;
+
+        let mut locations = Vec::new();
+        if include_declaration {
+            let entry = self.workspace.get(&target_path)?;
+            let anchor = entry.index.anchors.get(&target_id)?;
+            locations.push(Location {
+                uri: Url::from_file_path(&target_path).ok()?,
+                range: byte_range_to_lsp(&entry.text, &anchor.range),
+            });
+        }
+
+        for (path, range) in self.workspace.references_to(&target_path, &target_id) {
+            let Some(entry) = self.workspace.get(&path) else {
+                continue;
+            };
+            let Some(uri) = Url::from_file_path(&path).ok() else {
+                continue;
+            };
+            locations.push(Location {
+                uri,
+                range: byte_range_to_lsp(&entry.text, &range),
+            });
+        }
+
+        Some(locations)
+    }
+
+    fn reference_target_at(&self, path: &Path, offset: usize) -> Option<(PathBuf, String)> {
+        if let Some((id, _)) = self.workspace.anchor_at(path, offset) {
+            return Some((path.to_path_buf(), id.to_string()));
+        }
+
+        let reference = self.workspace.reference_at(path, offset)?;
+        let target = resolve_target(path, &reference.target)?;
+        target.id.map(|id| (target.path, id))
     }
 }
 

@@ -30,7 +30,7 @@ title = "plan"
 - [ ] `textDocument/semanticToken/full`
 - [ ] `textDocument/semanticToken/range`?
 - [ ] `textDocument/formatting`?
-- [ ] `textDocument/references`
+- [x] `textDocument/references`
 
 # Export
 
