@@ -5,6 +5,7 @@ use std::path::{Component, Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::sync::Arc;
 
+use cel::{Context, ExecutionError, Program, Value};
 use clap::Parser;
 use djot_core::{metadata_block, resolve_target, Workspace};
 use regex::Regex;
@@ -39,6 +40,23 @@ fn main() -> ExitCode {
                 .get(path)
                 .is_some_and(|text| metadata_matches(text, &config.metadata_filters))
         });
+    }
+
+    if let Some(query) = &config.query {
+        let plan = match QueryPlan::compile(query) {
+            Ok(plan) => plan,
+            Err(err) => {
+                eprintln!("djot-filter: {err}");
+                return ExitCode::FAILURE;
+            }
+        };
+        match retain_query_matches(&root, &docs, &mut paths, &plan) {
+            Ok(()) => {}
+            Err(err) => {
+                eprintln!("djot-filter: {err}");
+                return ExitCode::FAILURE;
+            }
+        }
     }
 
     paths.sort();
@@ -89,6 +107,10 @@ struct Config {
     /// metadata filters must match.
     #[arg(long = "metadata", value_name = "KEY=REGEX", value_parser = parse_metadata_filter)]
     metadata_filters: Vec<MetadataFilter>,
+
+    /// Keep files whose CEL predicate evaluates to true.
+    #[arg(long, value_name = "EXPR")]
+    query: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -116,6 +138,144 @@ struct LoadedDocs {
     workspace: Workspace,
     paths: Vec<PathBuf>,
     texts: HashMap<PathBuf, String>,
+}
+
+struct QueryPlan {
+    program: Program,
+}
+
+struct DocumentRecord<'a> {
+    root: &'a Path,
+    path: &'a Path,
+    text: &'a str,
+    reverse_references: &'a ReverseReferences,
+}
+
+impl QueryPlan {
+    fn compile(source: &str) -> Result<Self, String> {
+        let program =
+            Program::compile(source).map_err(|err| format!("invalid CEL query: {err}"))?;
+        Ok(Self { program })
+    }
+
+    fn matches(&self, record: DocumentRecord<'_>) -> Result<bool, String> {
+        let mut context = Context::default();
+        context.add_variable_from_value("path", display_path(record.root, record.path));
+        context.add_variable_from_value("title", document_title(record.text).unwrap_or_default());
+        context.add_variable_from_value(
+            "directly_referenced_by",
+            record
+                .reverse_references
+                .direct(record.path)
+                .into_iter()
+                .map(|path| display_path(record.root, &path))
+                .collect::<Vec<_>>(),
+        );
+        context.add_variable_from_value(
+            "transitively_referenced_by",
+            record
+                .reverse_references
+                .transitive(record.path)
+                .into_iter()
+                .map(|path| display_path(record.root, &path))
+                .collect::<Vec<_>>(),
+        );
+
+        match self.program.execute(&context) {
+            Ok(Value::Bool(value)) => Ok(value),
+            Ok(value) => Err(format!(
+                "CEL query must return bool, got {}",
+                value_type_name(&value)
+            )),
+            Err(ExecutionError::NoSuchKey(_)) => Ok(false),
+            Err(err) => Err(format!(
+                "cannot evaluate CEL query for {}: {err}",
+                record.path.display()
+            )),
+        }
+    }
+}
+
+fn retain_query_matches(
+    root: &Path,
+    docs: &LoadedDocs,
+    paths: &mut Vec<PathBuf>,
+    plan: &QueryPlan,
+) -> Result<(), String> {
+    let reverse_references = ReverseReferences::build(&docs.workspace);
+    let mut retained = Vec::new();
+
+    for path in paths.drain(..) {
+        let Some(text) = docs.texts.get(&path) else {
+            continue;
+        };
+        let record = DocumentRecord {
+            root,
+            path: &path,
+            text,
+            reverse_references: &reverse_references,
+        };
+        if plan.matches(record)? {
+            retained.push(path);
+        }
+    }
+
+    *paths = retained;
+    Ok(())
+}
+
+struct ReverseReferences {
+    direct: HashMap<PathBuf, HashSet<PathBuf>>,
+}
+
+impl ReverseReferences {
+    fn build(workspace: &Workspace) -> Self {
+        let mut direct: HashMap<PathBuf, HashSet<PathBuf>> = HashMap::new();
+        for (source, entry) in workspace.documents() {
+            for reference in &entry.index.references {
+                let Some(target) = resolve_target(source, &reference.target) else {
+                    continue;
+                };
+                if workspace.contains(&target.path) {
+                    direct
+                        .entry(target.path)
+                        .or_default()
+                        .insert(source.to_path_buf());
+                }
+            }
+        }
+        Self { direct }
+    }
+
+    fn direct(&self, path: &Path) -> Vec<PathBuf> {
+        sorted_paths(self.direct.get(path).into_iter().flatten().cloned())
+    }
+
+    fn transitive(&self, path: &Path) -> Vec<PathBuf> {
+        let mut out = HashSet::new();
+        let mut queue = VecDeque::new();
+
+        for source in self.direct(path) {
+            queue.push_back(source);
+        }
+
+        while let Some(source) = queue.pop_front() {
+            if source == path || !out.insert(source.clone()) {
+                continue;
+            }
+            for next in self.direct(&source) {
+                queue.push_back(next);
+            }
+        }
+
+        sorted_paths(out)
+    }
+}
+
+fn sorted_paths(paths: impl IntoIterator<Item = PathBuf>) -> Vec<PathBuf> {
+    let mut paths = paths.into_iter().collect::<Vec<_>>();
+    paths.sort();
+    paths
 }
 
 enum InteractiveAction {
@@ -279,6 +439,33 @@ fn metadata_string<'a>(table: &'a toml::Table, key: &str) -> Option<&'a str> {
         value = value.as_table()?.get(part)?;
     }
     value.as_str()
+}
+
+fn document_title(text: &str) -> Option<String> {
+    let metadata = metadata_block(text)?;
+    let value: toml::Value = toml::from_str(&metadata).ok()?;
+    value
+        .get("title")
+        .and_then(|title| title.as_str())
+        .map(str::to_string)
+}
+
+fn value_type_name(value: &Value) -> &'static str {
+    match value {
+        Value::List(_) => "list",
+        Value::Map(_) => "map",
+        Value::Function(_, _) => "function",
+        Value::Int(_) => "int",
+        Value::UInt(_) => "uint",
+        Value::Float(_) => "float",
+        Value::String(_) => "string",
+        Value::Bytes(_) => "bytes",
+        Value::Bool(_) => "bool",
+        Value::Duration(_) => "duration",
+        Value::Timestamp(_) => "timestamp",
+        Value::Opaque(_) => "opaque",
+        Value::Null => "null",
+    }
 }
 
 fn highlight_djot_preview(text: &str) -> String {
@@ -605,8 +792,62 @@ mod tests {
             direct: false,
             interactive: false,
             metadata_filters: Vec::new(),
+            query: None,
         };
         assert_eq!(default_root(&config), absolute_path(Path::new(".")));
+    }
+
+    #[test]
+    fn cel_query_matches_path_and_title() {
+        let root = unique_test_dir("djot-filter-query-title-test");
+        std::fs::create_dir_all(root.join("docs")).unwrap();
+        std::fs::write(
+            root.join("docs/semantics.dj"),
+            "{.metadata}\n``` toml\ntitle = \"Semantics Guide\"\n```\n\n# H\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("notes.dj"), "# Notes\n").unwrap();
+
+        let docs = load_docs(&root).unwrap();
+        let mut paths = docs.paths.clone();
+        let plan =
+            QueryPlan::compile("path.startsWith('docs/') && title.matches('Semantics')").unwrap();
+        retain_query_matches(&root, &docs, &mut paths, &plan).unwrap();
+
+        assert_eq!(paths, vec![normalize(&root.join("docs/semantics.dj"))]);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn cel_query_matches_direct_and_transitive_reverse_references() {
+        let root = unique_test_dir("djot-filter-query-reference-test");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("index.dj"), "[topic](topic.dj)\n").unwrap();
+        std::fs::write(root.join("topic.dj"), "[leaf](leaf.dj)\n").unwrap();
+        std::fs::write(root.join("leaf.dj"), "# Leaf\n").unwrap();
+
+        let docs = load_docs(&root).unwrap();
+
+        let mut direct_paths = docs.paths.clone();
+        let direct = QueryPlan::compile("'index.dj' in directly_referenced_by").unwrap();
+        retain_query_matches(&root, &docs, &mut direct_paths, &direct).unwrap();
+        direct_paths.sort();
+        assert_eq!(direct_paths, vec![normalize(&root.join("topic.dj"))]);
+
+        let mut transitive_paths = docs.paths.clone();
+        let transitive = QueryPlan::compile("'index.dj' in transitively_referenced_by").unwrap();
+        retain_query_matches(&root, &docs, &mut transitive_paths, &transitive).unwrap();
+        transitive_paths.sort();
+        assert_eq!(
+            transitive_paths,
+            vec![
+                normalize(&root.join("leaf.dj")),
+                normalize(&root.join("topic.dj")),
+            ]
+        );
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

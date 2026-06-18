@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+cel.workspace = true
 clap.workspace = true
 djot-core = { path = "../djot-core" }
 regex.workspace = true
