@@ -13,8 +13,63 @@ fn rename_anchor_updates_declaration_and_workspace_references() {
     std::fs::create_dir_all(&dir).unwrap();
     let a = dir.join("a.dj");
     let b = dir.join("b.dj");
+    let doc_a = "# A\n\nsee [topic](b.dj#topic)\n";
+    let doc_b = "{#topic}\nTopic\n\n[local](#topic)\n";
+    std::fs::write(&a, doc_a).unwrap();
+    std::fs::write(&b, doc_b).unwrap();
+
+    let root_uri = Url::from_directory_path(&dir).unwrap().to_string();
+    let a_uri = Url::from_file_path(&a).unwrap().to_string();
+    let topic_col = (doc_a.lines().nth(2).unwrap().find("#topic").unwrap() + 1) as i64;
+    let position = json!({"line":2,"character":topic_col});
+    let text_document = json!({"uri":a_uri});
+
+    let msgs = [
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{},"processId":null,"rootUri":root_uri}}),
+        json!({"jsonrpc":"2.0","method":"initialized","params":{}}),
+        json!({"jsonrpc":"2.0","id":2,"method":"textDocument/prepareRename",
+        "params":{"textDocument":text_document.clone(),"position":position.clone()}}),
+        json!({"jsonrpc":"2.0","id":3,"method":"textDocument/rename",
+        "params":{"textDocument":text_document,"position":position,"newName":"Renamed"}}),
+        json!({"jsonrpc":"2.0","id":99,"method":"shutdown","params":null}),
+        json!({"jsonrpc":"2.0","method":"exit","params":null}),
+    ];
+
+    let responses = run_session(&msgs);
+    let prepare = response_result(&responses, 2);
+    assert_eq!(prepare["placeholder"], json!("topic"));
+    assert_eq!(
+        prepare["range"]["start"],
+        json!({"line":2,"character":topic_col})
+    );
+    assert_eq!(
+        prepare["range"]["end"],
+        json!({"line":2,"character":topic_col + "topic".len() as i64})
+    );
+
+    assert_eq!(
+        sorted_edits(response_result(&responses, 3)),
+        vec![
+            (
+                "a.dj".to_string(),
+                2,
+                topic_col as u64,
+                "Renamed".to_string()
+            ),
+            ("b.dj".to_string(), 0, 2, "Renamed".to_string()),
+            ("b.dj".to_string(), 3, 9, "Renamed".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn rename_rejects_implicit_heading_anchor() {
+    let dir = std::env::temp_dir().join("djot-ls-rename-implicit-heading-test");
+    std::fs::create_dir_all(&dir).unwrap();
+    let a = dir.join("a.dj");
+    let b = dir.join("b.dj");
     let doc_a = "# A\n\nsee [topic](b.dj#Topic)\n";
-    let doc_b = "# Topic\n\n[local](#Topic)\n";
+    let doc_b = "# Topic\n";
     std::fs::write(&a, doc_a).unwrap();
     std::fs::write(&b, doc_b).unwrap();
 
@@ -36,29 +91,13 @@ fn rename_anchor_updates_declaration_and_workspace_references() {
     ];
 
     let responses = run_session(&msgs);
-    let prepare = response_result(&responses, 2);
-    assert_eq!(prepare["placeholder"], json!("Topic"));
     assert_eq!(
-        prepare["range"]["start"],
-        json!({"line":2,"character":topic_col})
+        response_error_message(&responses, 2),
+        "Renaming implicit heading anchors is not supported yet; add an explicit {#id} anchor and rename that instead."
     );
     assert_eq!(
-        prepare["range"]["end"],
-        json!({"line":2,"character":topic_col + "Topic".len() as i64})
-    );
-
-    assert_eq!(
-        sorted_edits(response_result(&responses, 3)),
-        vec![
-            (
-                "a.dj".to_string(),
-                2,
-                topic_col as u64,
-                "Renamed".to_string()
-            ),
-            ("b.dj".to_string(), 0, 2, "Renamed".to_string()),
-            ("b.dj".to_string(), 2, 9, "Renamed".to_string()),
-        ]
+        response_error_message(&responses, 3),
+        "Renaming implicit heading anchors is not supported yet; add an explicit {#id} anchor and rename that instead."
     );
 }
 
@@ -67,6 +106,15 @@ fn response_result(responses: &[Value], id: i64) -> &Value {
         .iter()
         .find(|message| message["id"] == json!(id))
         .unwrap_or_else(|| panic!("no response for id {id}"))["result"]
+}
+
+fn response_error_message(responses: &[Value], id: i64) -> &str {
+    responses
+        .iter()
+        .find(|message| message["id"] == json!(id))
+        .unwrap_or_else(|| panic!("no response for id {id}"))["error"]["message"]
+        .as_str()
+        .expect("error message is not a string")
 }
 
 fn sorted_edits(edit: &Value) -> Vec<(String, u64, u64, String)> {

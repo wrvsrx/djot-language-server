@@ -8,10 +8,10 @@ use async_lsp::panic::CatchUnwindLayer;
 use async_lsp::router::Router;
 use async_lsp::server::LifecycleLayer;
 use async_lsp::tracing::TracingLayer;
-use async_lsp::{ClientSocket, LanguageServer, ResponseError};
+use async_lsp::{ClientSocket, ErrorCode, LanguageServer, ResponseError};
 use djot_core::{
     heading_outline, metadata_block, resolve_target, AnalysisDiagnostic, DiagnosticKind, Heading,
-    RefTarget, Workspace,
+    RefTarget, RenameTargetError, Workspace,
 };
 use futures::future::BoxFuture;
 use jotdown::{Container, Event, Parser};
@@ -218,7 +218,7 @@ impl LanguageServer for ServerState {
         params: TextDocumentPositionParams,
     ) -> BoxFuture<'static, Result<Option<PrepareRenameResponse>, Self::Error>> {
         let response = self.resolve_prepare_rename(&params.text_document.uri, params.position);
-        Box::pin(async move { Ok(response) })
+        Box::pin(async move { response })
     }
 
     fn rename(
@@ -227,7 +227,7 @@ impl LanguageServer for ServerState {
     ) -> BoxFuture<'static, Result<Option<WorkspaceEdit>, Self::Error>> {
         let pos = params.text_document_position;
         let edit = self.resolve_rename(&pos.text_document.uri, pos.position, params.new_name);
-        Box::pin(async move { Ok(edit) })
+        Box::pin(async move { edit })
     }
 }
 
@@ -407,15 +407,26 @@ impl ServerState {
         &self,
         uri: &Url,
         position: Position,
-    ) -> Option<PrepareRenameResponse> {
-        let from = uri.to_file_path().ok()?;
-        let entry = self.workspace.get(&from)?;
+    ) -> Result<Option<PrepareRenameResponse>, ResponseError> {
+        let from = match uri.to_file_path() {
+            Ok(path) => path,
+            Err(()) => return Ok(None),
+        };
+        let Some(entry) = self.workspace.get(&from) else {
+            return Ok(None);
+        };
         let offset = position_to_offset(&entry.text, position);
-        let target = self.workspace.rename_target_at(&from, offset)?;
-        Some(PrepareRenameResponse::RangeWithPlaceholder {
+        let target = match self.workspace.rename_target_at(&from, offset) {
+            Ok(target) => target,
+            Err(RenameTargetError::NotRenameable) => return Ok(None),
+            Err(RenameTargetError::ImplicitHeadingAnchor) => {
+                return Err(implicit_heading_rename_error());
+            }
+        };
+        Ok(Some(PrepareRenameResponse::RangeWithPlaceholder {
             range: byte_range_to_lsp(&entry.text, &target.range),
             placeholder: target.id,
-        })
+        }))
     }
 
     fn resolve_rename(
@@ -423,31 +434,46 @@ impl ServerState {
         uri: &Url,
         position: Position,
         new_name: String,
-    ) -> Option<WorkspaceEdit> {
+    ) -> Result<Option<WorkspaceEdit>, ResponseError> {
         if !is_valid_anchor_id(&new_name) {
-            return None;
+            return Ok(None);
         }
 
-        let from = uri.to_file_path().ok()?;
-        let entry = self.workspace.get(&from)?;
+        let from = match uri.to_file_path() {
+            Ok(path) => path,
+            Err(()) => return Ok(None),
+        };
+        let Some(entry) = self.workspace.get(&from) else {
+            return Ok(None);
+        };
         let offset = position_to_offset(&entry.text, position);
-        let target = self.workspace.rename_target_at(&from, offset)?;
+        let target = match self.workspace.rename_target_at(&from, offset) {
+            Ok(target) => target,
+            Err(RenameTargetError::NotRenameable) => return Ok(None),
+            Err(RenameTargetError::ImplicitHeadingAnchor) => {
+                return Err(implicit_heading_rename_error());
+            }
+        };
         let edits = self.workspace.rename_edits(&target.path, &target.id);
         if edits.is_empty() {
-            return None;
+            return Ok(None);
         }
 
         let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
         for edit in edits {
-            let entry = self.workspace.get(&edit.path)?;
-            let uri = Url::from_file_path(&edit.path).ok()?;
+            let Some(entry) = self.workspace.get(&edit.path) else {
+                return Ok(None);
+            };
+            let Some(uri) = Url::from_file_path(&edit.path).ok() else {
+                return Ok(None);
+            };
             changes.entry(uri).or_default().push(TextEdit::new(
                 byte_range_to_lsp(&entry.text, &edit.range),
                 new_name.clone(),
             ));
         }
 
-        Some(WorkspaceEdit::new(changes))
+        Ok(Some(WorkspaceEdit::new(changes)))
     }
 
     fn resolve_hover(&mut self, uri: &Url, position: Position) -> Option<Hover> {
@@ -878,6 +904,13 @@ fn completion_item(
 
 fn is_valid_anchor_id(id: &str) -> bool {
     !id.is_empty() && !id.contains('#') && !id.chars().any(char::is_whitespace)
+}
+
+fn implicit_heading_rename_error() -> ResponseError {
+    ResponseError::new(
+        ErrorCode::INVALID_REQUEST,
+        "Renaming implicit heading anchors is not supported yet; add an explicit {#id} anchor and rename that instead.",
+    )
 }
 
 fn to_lsp_diagnostic(text: &str, diagnostic: AnalysisDiagnostic) -> Diagnostic {
