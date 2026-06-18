@@ -50,6 +50,23 @@ This is a **Cargo workspace** (`crates/*`) so the djot semantics can be shared b
 - The dev environment is a Nix flake (`use_flake .` via direnv); `dev/envrc` is symlinked to the repo-root `.envrc`.
 - Git hooks live in `dev/hooks/`; enable them once per clone with `git config core.hooksPath dev/hooks`. The `pre-commit` hook checks that `README.md` is still in sync with `README.dj` whenever either is committed.
 
+## Commit workflow
+
+When asked to commit a non-trivial change, split the work into small, logical
+commits instead of one broad commit. Prefer this order when it applies:
+
+- protocol-agnostic core data/model changes first;
+- core behavior/API changes with focused unit tests next;
+- LSP/CLI integration and black-box tests after the shared behavior exists;
+- docs or roadmap status updates last, in their own commit when they are just
+  reflecting completed work.
+
+Before each commit, check `git status --short` and `git diff` so unrelated user
+changes are not included. Run the narrowest relevant tests before intermediate
+commits, and run the full relevant suite before the final implementation
+commit. Use concise conventional-style messages such as `core: ...`, `ls: ...`,
+or `docs: ...`.
+
 ## Generated README
 
 `README.md` is generated from `README.dj` by this project's own exporter; do not edit it by hand. Regenerate after editing `README.dj`:
