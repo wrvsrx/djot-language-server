@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ops::{ControlFlow, Range as ByteRange};
 use std::path::{Path, PathBuf};
 
@@ -22,10 +22,12 @@ use lsp_types::{
     DidSaveTextDocumentParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
     GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents, HoverParams,
     HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams, Location,
-    MarkupContent, MarkupKind, NumberOrString, OneOf, Position, ProgressParams,
-    ProgressParamsValue, PublishDiagnosticsParams, Range, ReferenceParams, ServerCapabilities,
-    SymbolKind, TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit, Url, WorkDoneProgress,
+    MarkupContent, MarkupKind, NumberOrString, OneOf, Position, PrepareRenameResponse,
+    ProgressParams, ProgressParamsValue, PublishDiagnosticsParams, Range, ReferenceParams,
+    RenameOptions, RenameParams, ServerCapabilities, SymbolKind, TextDocumentPositionParams,
+    TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit, Url, WorkDoneProgress,
     WorkDoneProgressBegin, WorkDoneProgressEnd, WorkDoneProgressOptions, WorkDoneProgressReport,
+    WorkspaceEdit,
 };
 use tower::ServiceBuilder;
 use tracing::Level;
@@ -65,6 +67,10 @@ impl LanguageServer for ServerState {
                     definition_provider: Some(OneOf::Left(true)),
                     references_provider: Some(OneOf::Left(true)),
                     hover_provider: Some(HoverProviderCapability::Simple(true)),
+                    rename_provider: Some(OneOf::Right(RenameOptions {
+                        prepare_provider: Some(true),
+                        work_done_progress_options: WorkDoneProgressOptions::default(),
+                    })),
                     completion_provider: Some(CompletionOptions {
                         resolve_provider: Some(false),
                         trigger_characters: Some(vec![
@@ -205,6 +211,23 @@ impl LanguageServer for ServerState {
         let pos = params.text_document_position;
         let completions = self.resolve_completion(&pos.text_document.uri, pos.position);
         Box::pin(async move { Ok(completions.map(CompletionResponse::Array)) })
+    }
+
+    fn prepare_rename(
+        &mut self,
+        params: TextDocumentPositionParams,
+    ) -> BoxFuture<'static, Result<Option<PrepareRenameResponse>, Self::Error>> {
+        let response = self.resolve_prepare_rename(&params.text_document.uri, params.position);
+        Box::pin(async move { Ok(response) })
+    }
+
+    fn rename(
+        &mut self,
+        params: RenameParams,
+    ) -> BoxFuture<'static, Result<Option<WorkspaceEdit>, Self::Error>> {
+        let pos = params.text_document_position;
+        let edit = self.resolve_rename(&pos.text_document.uri, pos.position, params.new_name);
+        Box::pin(async move { Ok(edit) })
     }
 }
 
@@ -378,6 +401,53 @@ impl ServerState {
         let reference = self.workspace.reference_at(path, offset)?;
         let target = resolve_target(path, &reference.target)?;
         target.id.map(|id| (target.path, id))
+    }
+
+    fn resolve_prepare_rename(
+        &self,
+        uri: &Url,
+        position: Position,
+    ) -> Option<PrepareRenameResponse> {
+        let from = uri.to_file_path().ok()?;
+        let entry = self.workspace.get(&from)?;
+        let offset = position_to_offset(&entry.text, position);
+        let target = self.workspace.rename_target_at(&from, offset)?;
+        Some(PrepareRenameResponse::RangeWithPlaceholder {
+            range: byte_range_to_lsp(&entry.text, &target.range),
+            placeholder: target.id,
+        })
+    }
+
+    fn resolve_rename(
+        &self,
+        uri: &Url,
+        position: Position,
+        new_name: String,
+    ) -> Option<WorkspaceEdit> {
+        if !is_valid_anchor_id(&new_name) {
+            return None;
+        }
+
+        let from = uri.to_file_path().ok()?;
+        let entry = self.workspace.get(&from)?;
+        let offset = position_to_offset(&entry.text, position);
+        let target = self.workspace.rename_target_at(&from, offset)?;
+        let edits = self.workspace.rename_edits(&target.path, &target.id);
+        if edits.is_empty() {
+            return None;
+        }
+
+        let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
+        for edit in edits {
+            let entry = self.workspace.get(&edit.path)?;
+            let uri = Url::from_file_path(&edit.path).ok()?;
+            changes.entry(uri).or_default().push(TextEdit::new(
+                byte_range_to_lsp(&entry.text, &edit.range),
+                new_name.clone(),
+            ));
+        }
+
+        Some(WorkspaceEdit::new(changes))
     }
 
     fn resolve_hover(&mut self, uri: &Url, position: Position) -> Option<Hover> {
@@ -804,6 +874,10 @@ fn completion_item(
         ))),
         ..CompletionItem::default()
     }
+}
+
+fn is_valid_anchor_id(id: &str) -> bool {
+    !id.is_empty() && !id.contains('#') && !id.chars().any(char::is_whitespace)
 }
 
 fn to_lsp_diagnostic(text: &str, diagnostic: AnalysisDiagnostic) -> Diagnostic {
