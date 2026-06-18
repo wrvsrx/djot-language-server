@@ -47,6 +47,8 @@ title = "plan"
     workspace links to the moved Djot file
   - [x] require client support for `documentChanges` and `rename` resource
     operations before returning file rename edits
+  - [ ] reconcile optimistic path rename indexing with client/file-system
+    outcome (e.g. file notifications or targeted re-indexing)
   - [x] rename link targets from either the anchor declaration or any reference
   - [x] return a `WorkspaceEdit` with same-file and cross-file text edits
   - [x] reject URL links and file-only links that do not name an anchor
