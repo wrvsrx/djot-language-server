@@ -475,6 +475,13 @@ impl Workspace {
         let reference = self
             .reference_at(&path, offset)
             .ok_or(RenameTargetError::NotRenameable)?;
+        let target_id_range = reference
+            .target_id_range
+            .clone()
+            .ok_or(RenameTargetError::NotRenameable)?;
+        if !contains_inclusive(&target_id_range, offset) {
+            return Err(RenameTargetError::NotRenameable);
+        }
         let target =
             resolve_target(&path, &reference.target).ok_or(RenameTargetError::NotRenameable)?;
         let id = target.id.ok_or(RenameTargetError::NotRenameable)?;
@@ -488,10 +495,7 @@ impl Workspace {
         Ok(RenameTarget {
             path: target.path,
             id,
-            range: reference
-                .target_id_range
-                .clone()
-                .ok_or(RenameTargetError::NotRenameable)?,
+            range: target_id_range,
         })
     }
 
@@ -969,6 +973,10 @@ mod tests {
         assert_eq!(from_reference.path, PathBuf::from("/notes/b.dj"));
         assert_eq!(from_reference.id, "topic");
         assert_eq!(&doc_a[from_reference.range], "topic");
+        assert_eq!(
+            ws.rename_target_at(&a, doc_a.find("b.dj").unwrap()),
+            Err(RenameTargetError::NotRenameable)
+        );
     }
 
     #[test]
