@@ -41,8 +41,11 @@ title = "plan"
 - [x] `textDocument/rename`
 
   - [x] rename explicit anchors and all workspace references to them
-  - [ ] rename implicit heading anchors after deriving the escaped id for the
-    new heading text
+  - [x] reject implicit heading anchor rename with a prompt to add an explicit
+    `{#id}` anchor or rename the heading text
+  - [ ] support heading text rename separately from anchor id rename: replace
+    the heading text, derive the new Djot escaped heading id, and update
+    references from the old heading id to the new id
   - [x] rename link paths by returning a `RenameFile` operation and updating
     workspace links to the moved Djot file
   - [x] require client support for `documentChanges` and `rename` resource
