@@ -63,6 +63,51 @@ fn rename_anchor_updates_declaration_and_workspace_references() {
 }
 
 #[test]
+fn rename_reference_updates_declaration_and_all_references() {
+    let dir = std::env::temp_dir().join("djot-ls-rename-reference-all-test");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let doc = dir.join("doc.dj");
+    let text = "{#xxx}\nAnchor\n\n[#xxx]\n\n[#xxx]\n";
+    std::fs::write(&doc, text).unwrap();
+
+    let root_uri = Url::from_directory_path(&dir).unwrap().to_string();
+    let doc_uri = Url::from_file_path(&doc).unwrap().to_string();
+    let id_col = (text.lines().nth(3).unwrap().find("#xxx").unwrap() + 1) as i64;
+    let second_id_col = (text.lines().nth(5).unwrap().find("#xxx").unwrap() + 1) as i64;
+    let position = json!({"line":3,"character":id_col});
+    let text_document = json!({"uri":doc_uri});
+
+    let msgs = [
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{},"processId":null,"rootUri":root_uri}}),
+        json!({"jsonrpc":"2.0","method":"initialized","params":{}}),
+        json!({"jsonrpc":"2.0","id":2,"method":"textDocument/prepareRename",
+        "params":{"textDocument":text_document.clone(),"position":position.clone()}}),
+        json!({"jsonrpc":"2.0","id":3,"method":"textDocument/rename",
+        "params":{"textDocument":text_document,"position":position,"newName":"yyy"}}),
+        json!({"jsonrpc":"2.0","id":99,"method":"shutdown","params":null}),
+        json!({"jsonrpc":"2.0","method":"exit","params":null}),
+    ];
+
+    let responses = run_session(&msgs);
+    let prepare = response_result(&responses, 2);
+    assert_eq!(prepare["placeholder"], json!("xxx"));
+    assert_eq!(
+        sorted_edits(response_result(&responses, 3)),
+        vec![
+            ("doc.dj".to_string(), 0, 2, "yyy".to_string()),
+            ("doc.dj".to_string(), 3, id_col as u64, "yyy".to_string()),
+            (
+                "doc.dj".to_string(),
+                5,
+                second_id_col as u64,
+                "yyy".to_string()
+            ),
+        ]
+    );
+}
+
+#[test]
 fn rename_link_path_renames_file_and_updates_workspace_links() {
     let dir = std::env::temp_dir().join("djot-ls-rename-link-path-test");
     let _ = std::fs::remove_dir_all(&dir);
