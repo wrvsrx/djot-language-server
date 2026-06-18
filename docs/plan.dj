@@ -40,7 +40,9 @@ title = "plan"
 
 - [x] `textDocument/rename`
 
-  - [x] rename heading/explicit anchors and all workspace references to them
+  - [x] rename explicit anchors and all workspace references to them
+  - [ ] rename implicit heading anchors after deriving the escaped id for the
+    new heading text
   - [x] rename link targets from either the anchor declaration or any reference
   - [x] return a `WorkspaceEdit` with same-file and cross-file text edits
   - [x] reject URL links and file-only links that do not name an anchor
