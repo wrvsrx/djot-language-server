@@ -89,6 +89,21 @@ pub enum DiagnosticKind {
     UnresolvedPath { path: String },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenameTarget {
+    /// The document containing the anchor declaration.
+    pub path: PathBuf,
+    pub id: String,
+    /// The source range under the cursor that should be selected before rename.
+    pub range: Range<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenameEdit {
+    pub path: PathBuf,
+    pub range: Range<usize>,
+}
+
 /// Build the heading hierarchy for `text`.
 ///
 /// jotdown wraps each heading in a `Section` container that nests by heading
@@ -399,6 +414,64 @@ impl Workspace {
         out
     }
 
+    /// Resolve the anchor symbol under `offset`, either from the anchor
+    /// declaration itself or from an editable link target that points to it.
+    pub fn rename_target_at(&self, path: &Path, offset: usize) -> Option<RenameTarget> {
+        let path = normalize(path);
+        if let Some((id, anchor)) = self.anchor_at(&path, offset) {
+            return Some(RenameTarget {
+                path,
+                id: id.to_string(),
+                range: anchor.rename_range.clone(),
+            });
+        }
+
+        let reference = self.reference_at(&path, offset)?;
+        let target = resolve_target(&path, &reference.target)?;
+        let id = target.id?;
+        self.anchor(&target.path, &id)?;
+
+        Some(RenameTarget {
+            path: target.path,
+            id,
+            range: reference.target_id_range.clone()?,
+        })
+    }
+
+    /// Every editable source range that should be replaced when renaming the
+    /// anchor `(path, id)`. Scans all loaded documents, so completeness requires
+    /// the caller to have indexed the workspace first.
+    pub fn rename_edits(&self, path: &Path, id: &str) -> Vec<RenameEdit> {
+        let target = normalize(path);
+        let mut edits = Vec::new();
+
+        if let Some(anchor) = self.anchor(&target, id) {
+            edits.push(RenameEdit {
+                path: target.clone(),
+                range: anchor.rename_range.clone(),
+            });
+        }
+
+        for (src, entry) in &self.docs {
+            for reference in &entry.index.references {
+                let Some(range) = &reference.target_id_range else {
+                    continue;
+                };
+                let Some(resolved) = resolve_target(src, &reference.target) else {
+                    continue;
+                };
+                if resolved.path == target && resolved.id.as_deref() == Some(id) {
+                    edits.push(RenameEdit {
+                        path: src.clone(),
+                        range: range.clone(),
+                    });
+                }
+            }
+        }
+
+        edits
+    }
+
     /// Diagnostics for unresolved file and anchor references in one loaded
     /// document. URLs are intentionally ignored.
     pub fn diagnostics_for(&self, path: &Path) -> Vec<AnalysisDiagnostic> {
@@ -649,6 +722,57 @@ mod tests {
         let back = ws.references_to(&b, "Topic");
         assert_eq!(back.len(), 1);
         assert_eq!(back[0].0, a);
+    }
+
+    #[test]
+    fn workspace_resolves_rename_target_from_anchor_or_reference() {
+        let a = PathBuf::from("/notes/a.dj");
+        let b = PathBuf::from("/notes/b.dj");
+        let doc_a = "# A\n\nsee [to B](b.dj#Topic)\n";
+        let doc_b = "# Topic\n";
+        let mut ws = Workspace::new();
+        ws.insert(a.clone(), doc_a.to_string());
+        ws.insert(b.clone(), doc_b.to_string());
+
+        let from_anchor = ws
+            .rename_target_at(&b, doc_b.find("Topic").unwrap())
+            .expect("rename target from anchor");
+        assert_eq!(from_anchor.path, b);
+        assert_eq!(from_anchor.id, "Topic");
+        assert_eq!(&doc_b[from_anchor.range], "Topic");
+
+        let from_reference = ws
+            .rename_target_at(&a, doc_a.find("Topic").unwrap())
+            .expect("rename target from reference");
+        assert_eq!(from_reference.path, PathBuf::from("/notes/b.dj"));
+        assert_eq!(from_reference.id, "Topic");
+        assert_eq!(&doc_a[from_reference.range], "Topic");
+    }
+
+    #[test]
+    fn workspace_collects_rename_edits() {
+        let a = PathBuf::from("/notes/a.dj");
+        let b = PathBuf::from("/notes/b.dj");
+        let doc_a = "# A\n\n[local](#A) [other](b.dj#Topic) [file](b.dj)\n";
+        let doc_b = "# Topic\n\n[back](../notes/a.dj#A)\n";
+        let mut ws = Workspace::new();
+        ws.insert(a.clone(), doc_a.to_string());
+        ws.insert(b.clone(), doc_b.to_string());
+
+        let mut edits = ws
+            .rename_edits(&b, "Topic")
+            .into_iter()
+            .map(|edit| {
+                let text = &ws.get(&edit.path).unwrap().text;
+                (edit.path, text[edit.range].to_string())
+            })
+            .collect::<Vec<_>>();
+        edits.sort_by(|a, b| a.0.cmp(&b.0));
+
+        assert_eq!(
+            edits,
+            vec![(a, "Topic".to_string()), (b, "Topic".to_string())]
+        );
     }
 
     #[test]
