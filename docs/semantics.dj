@@ -3,24 +3,30 @@
 title = "semantics"
 ```
 
-# Djot language server semantics
+# Djot tools semantics
 
-This document records the conventions that `djot-ls` layers on top of Djot
-syntax. They are project semantics, not additions to the Djot syntax itself.
+This document records the conventions that `djot-tools` layers on top of Djot
+syntax. They are project semantics, not additions to Djot syntax itself.
 Other Djot tools may parse the same source without applying these rules.
+
+Planned note/task semantics are tracked in `docs/plan.dj`; they are not part of
+the current semantics described here.
 
 # Djot documents
 
 Files ending in `.dj` or `.djot` are Djot documents.
 
-Workspace-wide semantics use the LSP workspace root supplied by the client.
-During initialization, `djot-ls` indexes `.dj` and `.djot` files under that
-root. Without a workspace root, only opened buffers and lazily loaded target
-documents are known.
+A workspace is a set of known Djot documents, keyed by normalized file path.
+Workspace-wide operations such as cross-file references and backlinks are only
+complete for documents that have been loaded into that set.
+
+Tools may populate the workspace from directories, opened buffers, or lazily
+loaded target files. Open buffers can temporarily override the disk version of
+the same document while they are being edited.
 
 # Metadata
 
-A document may begin with a code block carrying the `metadata` class:
+A document may contain a code block carrying the `metadata` class:
 
 ```` djot
 {.metadata}
@@ -31,9 +37,6 @@ date = "2026-06-16"
 ```
 ````
 
-Only a leading classed code block is document metadata. A normal code block, or
-a `{.metadata}` block after body content, is ordinary document content.
-
 The metadata block body is TOML. Current semantic fields are intentionally
 minimal:
 
@@ -41,7 +44,12 @@ minimal:
   name.
 
 `djot-export` folds this TOML into pandoc metadata instead of rendering the
-block as body content.
+block as body content. `djot-filter` can match string metadata fields by key;
+dotted keys traverse TOML tables.
+
+Current implementation note: tools use the first code block carrying the
+`metadata` class. They do not currently diagnose later metadata blocks or
+require metadata to be the first block.
 
 # Anchors
 
@@ -66,14 +74,13 @@ Anchor ids are matched exactly. `#Conclusion` and `#conclusion` are different
 targets.
 
 If multiple elements define the same id in one document, the first indexed
-definition wins. Duplicate-anchor diagnostics are not currently part of the
-semantics.
+definition wins. Duplicate-anchor diagnostics are not currently emitted.
 
 # References
 
 A reference is a link whose destination names a Djot semantic target.
 
-`djot-ls` classifies link destinations as follows:
+`djot-tools` classifies link destinations as follows:
 
 - `#id`: an anchor in the same document.
 - `path.dj`: another Djot document.
@@ -89,7 +96,7 @@ normalized lexically, including `.` and `..`.
 Inline links, reference links, and implicit links are treated uniformly after
 jotdown resolves them to a destination string.
 
-# Target Resolution
+# Target resolution
 
 For Djot semantic references:
 
@@ -99,19 +106,19 @@ For Djot semantic references:
 - URL-like destinations do not resolve to Djot targets.
 - Non-Djot paths do not resolve to Djot targets.
 
-File-only Djot references name a document, not an anchor. They can be used for
-file navigation, but they do not participate in anchor reference queries.
+File-only Djot references name a document, not an anchor. They can resolve to
+the target document, but they do not participate in anchor reference queries.
 
 # Diagnostics
 
-Diagnostics are emitted only for unresolved Djot semantic references:
+The current semantic diagnostics are unresolved Djot references:
 
 - missing same-document anchors (`#id`)
 - missing `.dj` or `.djot` target files
 - missing anchors in `.dj` or `.djot` target files
 
-Diagnostics are not emitted for external URLs, non-Djot file links, or directory
-links.
+External URLs, non-Djot file links, and directory links are outside these
+reference diagnostics.
 
-Because cross-file diagnostics depend on the workspace index, they are most
-complete when the LSP client supplies a workspace root.
+Because cross-file diagnostics depend on the workspace, they are only complete
+for documents that have been loaded into the workspace.
