@@ -24,10 +24,10 @@ use lsp_types::{
     HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams, Location,
     MarkupContent, MarkupKind, NumberOrString, OneOf, Position, PrepareRenameResponse,
     ProgressParams, ProgressParamsValue, PublishDiagnosticsParams, Range, ReferenceParams,
-    RenameOptions, RenameParams, ServerCapabilities, SymbolKind, TextDocumentPositionParams,
-    TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit, Url, WorkDoneProgress,
-    WorkDoneProgressBegin, WorkDoneProgressEnd, WorkDoneProgressOptions, WorkDoneProgressReport,
-    WorkspaceEdit,
+    RenameOptions, RenameParams, ResourceOperationKind, ServerCapabilities, SymbolKind,
+    TextDocumentPositionParams, TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit, Url,
+    WorkDoneProgress, WorkDoneProgressBegin, WorkDoneProgressEnd, WorkDoneProgressOptions,
+    WorkDoneProgressReport, WorkspaceEdit,
 };
 use tower::ServiceBuilder;
 use tracing::Level;
@@ -42,8 +42,18 @@ struct ServerState {
     workspace: Workspace,
     /// Roots supplied by the LSP client during initialize.
     workspace_roots: Vec<PathBuf>,
+    /// Client support for workspace edits that include resource operations.
+    #[allow(dead_code)]
+    workspace_edit_capabilities: ClientWorkspaceEditCapabilities,
     /// Open buffers that should receive publishDiagnostics updates.
     open_documents: HashSet<PathBuf>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, Default)]
+struct ClientWorkspaceEditCapabilities {
+    document_changes: bool,
+    rename_resource_operation: bool,
 }
 
 impl LanguageServer for ServerState {
@@ -55,6 +65,7 @@ impl LanguageServer for ServerState {
         params: InitializeParams,
     ) -> BoxFuture<'static, Result<InitializeResult, Self::Error>> {
         self.workspace_roots = workspace_roots(&params);
+        self.workspace_edit_capabilities = client_workspace_edit_capabilities(&params);
 
         Box::pin(async move {
             Ok(InitializeResult {
@@ -1138,6 +1149,7 @@ async fn main() {
                 client,
                 workspace: Workspace::new(),
                 workspace_roots: Vec::new(),
+                workspace_edit_capabilities: ClientWorkspaceEditCapabilities::default(),
                 open_documents: HashSet::new(),
             }))
     });
@@ -1169,6 +1181,27 @@ fn workspace_roots(params: &InitializeParams) -> Vec<PathBuf> {
             .and_then(|uri| uri.to_file_path().ok())
             .into_iter()
             .collect()
+    }
+}
+
+fn client_workspace_edit_capabilities(
+    params: &InitializeParams,
+) -> ClientWorkspaceEditCapabilities {
+    let Some(workspace_edit) = params
+        .capabilities
+        .workspace
+        .as_ref()
+        .and_then(|workspace| workspace.workspace_edit.as_ref())
+    else {
+        return ClientWorkspaceEditCapabilities::default();
+    };
+
+    ClientWorkspaceEditCapabilities {
+        document_changes: workspace_edit.document_changes == Some(true),
+        rename_resource_operation: workspace_edit
+            .resource_operations
+            .as_ref()
+            .is_some_and(|operations| operations.contains(&ResourceOperationKind::Rename)),
     }
 }
 
