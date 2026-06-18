@@ -38,6 +38,15 @@ title = "plan"
 
 - [x] `textDocument/references`
 
+- [ ] `textDocument/rename`
+
+  - [ ] rename heading/explicit anchors and all workspace references to them
+  - [ ] rename link targets from either the anchor declaration or any reference
+  - [ ] return a `WorkspaceEdit` with same-file and cross-file text edits
+  - [ ] reject URL links and file-only links that do not name an anchor
+  - [ ] keep edits byte/UTF-16 safe by reusing `djot-core` ranges and LSP
+    position conversion
+
 # Export
 
 `djot-export`: djot -> pandoc JSON AST (`djot-export doc.dj | pandoc -f json ...`).
