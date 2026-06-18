@@ -67,6 +67,24 @@ commits, and run the full relevant suite before the final implementation
 commit. Use concise conventional-style messages such as `core: ...`, `ls: ...`,
 or `docs: ...`.
 
+## Release workflow
+
+When asked to release a version, use this sequence:
+
+- bump `[workspace.package].version` in `Cargo.toml` from the current `*-dev`
+  version to the release version, such as `0.2.0-dev` to `0.2.0`;
+- do not edit `Cargo.lock` by hand; run a Cargo command such as
+  `cargo check --workspace` so Cargo updates the workspace package versions in
+  the lockfile;
+- commit the release version with a message like `chore: release 0.2.0`;
+- create a git tag with the exact release version, such as `git tag 0.2.0`,
+  pointing at the release commit;
+- bump `[workspace.package].version` in `Cargo.toml` to the next development
+  version, such as `0.3.0-dev`;
+- run `cargo check --workspace` again so Cargo updates `Cargo.lock`;
+- commit the development-version bump with a message like
+  `chore: bump version to 0.3.0-dev`.
+
 ## Generated README
 
 `README.md` is generated from `README.dj` by this project's own exporter; do not edit it by hand. Regenerate after editing `README.dj`:
