@@ -125,7 +125,8 @@ Tasks are unfinished by default. A task is complete when the div has a `done`
 attribute:
 
 ```` djot
-{#write-task-parser done="2026-06-19T21:30:00+08:00"}
+{#write-task-parser}
+{done="2026-06-19T21:30:00+08:00"}
 ::: task
 Write the task parser.
 
