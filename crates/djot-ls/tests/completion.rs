@@ -136,6 +136,47 @@ fn completion_inside_link_destination_inserts_path() {
 }
 
 #[test]
+fn completion_inside_closed_empty_destination_inserts_path() {
+    let dir = std::env::temp_dir().join("djot-ls-completion-closed-empty-path-test");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let a = dir.join("a.dj");
+    let usage = dir.join("usage.dj");
+    let doc_a = "# A\n\n[read]()";
+    std::fs::write(&a, doc_a).unwrap();
+    std::fs::write(
+        &usage,
+        "{.metadata}\n``` toml\ntitle = \"Usage Guide\"\n```\n\n# Usage\n",
+    )
+    .unwrap();
+
+    let root_uri = Url::from_directory_path(&dir).unwrap().to_string();
+    let a_uri = Url::from_file_path(&a).unwrap().to_string();
+    let msgs = [
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{},"processId":null,"rootUri":root_uri}}),
+        json!({"jsonrpc":"2.0","method":"initialized","params":{}}),
+        json!({"jsonrpc":"2.0","id":2,"method":"textDocument/completion",
+               "params":{"textDocument":{"uri":a_uri},"position":{"line":2,"character":7}}}),
+        json!({"jsonrpc":"2.0","id":99,"method":"shutdown","params":null}),
+        json!({"jsonrpc":"2.0","method":"exit","params":null}),
+    ];
+
+    let responses = run_session(&msgs);
+    let item = completion_item(&responses, 2, "usage.dj");
+
+    assert_eq!(item["detail"], json!("Usage Guide"));
+    assert_eq!(item["textEdit"]["newText"], json!("usage.dj"));
+    assert_eq!(
+        item["textEdit"]["range"]["start"],
+        json!({"line":2,"character":7})
+    );
+    assert_eq!(
+        item["textEdit"]["range"]["end"],
+        json!({"line":2,"character":7})
+    );
+}
+
+#[test]
 fn completion_inside_internal_anchor_inserts_anchor_id() {
     let dir = std::env::temp_dir().join("djot-ls-completion-internal-anchor-test");
     let _ = std::fs::remove_dir_all(&dir);

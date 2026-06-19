@@ -948,34 +948,63 @@ fn closed_link_anchor_completion_context(
         .into_offset_iter()
         .find_map(|(event, span)| match event {
             Event::End(Container::Link(dst, _)) if span.start <= offset && offset <= span.end => {
-                closed_link_anchor_from_end_span(text, span, dst.as_ref(), offset)
+                closed_link_completion_from_end_span(text, span, dst.as_ref(), offset)
             }
             _ => None,
         })
 }
 
-fn closed_link_anchor_from_end_span(
+fn closed_link_completion_from_end_span(
     text: &str,
     span: ByteRange<usize>,
     dst: &str,
     offset: usize,
 ) -> Option<LinkCompletionContext> {
-    let hash_in_dst = dst.find('#')?;
     let syntax = &text[span.clone()];
-    let dst_in_syntax = syntax.find(dst)?;
-    let dst_start = span.start + dst_in_syntax;
-    let fragment_start = dst_start + hash_in_dst + '#'.len_utf8();
-    let dst_end = dst_start + dst.len();
+    let dst_range = closed_link_destination_range(span.start, syntax, dst)?;
+    let dst_start = dst_range.start;
+    let dst_end = dst_range.end;
 
-    if offset < fragment_start || offset > dst_end {
+    if let Some(hash_in_dst) = dst.find('#') {
+        let fragment_start = dst_start + hash_in_dst + '#'.len_utf8();
+        if offset < fragment_start || offset > dst_end {
+            return None;
+        }
+
+        return Some(LinkCompletionContext::Anchor {
+            path: dst[..hash_in_dst].to_string(),
+            replace: fragment_start..offset,
+            query: text[fragment_start..offset].to_string(),
+        });
+    }
+
+    if offset < dst_start || offset > dst_end {
         return None;
     }
 
-    Some(LinkCompletionContext::Anchor {
-        path: dst[..hash_in_dst].to_string(),
-        replace: fragment_start..offset,
-        query: text[fragment_start..offset].to_string(),
+    Some(LinkCompletionContext::Destination {
+        replace: dst_start..offset,
+        query: text[dst_start..offset].to_string(),
     })
+}
+
+fn closed_link_destination_range(
+    span_start: usize,
+    syntax: &str,
+    dst: &str,
+) -> Option<ByteRange<usize>> {
+    if dst.is_empty() {
+        let open = syntax.find('(')?;
+        let close = syntax[open + '('.len_utf8()..].find(')')? + open + '('.len_utf8();
+        if close == open + '('.len_utf8() {
+            let cursor = span_start + close;
+            return Some(cursor..cursor);
+        }
+    }
+
+    let dst_in_syntax = syntax.find(dst)?;
+    let dst_start = span_start + dst_in_syntax;
+    Some(dst_start..dst_start + dst.len())
 }
 
 fn label_completion_replace_end(text: &str, offset: usize, limit: usize) -> usize {
