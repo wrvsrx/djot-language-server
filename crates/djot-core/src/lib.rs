@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 /// djot-ls / djot-export convention layered on djot's native attribute syntax,
 /// not part of djot itself — other djot tools simply see a classed code block.
 pub const METADATA_CLASS: &str = "metadata";
+pub const TASK_CLASS: &str = "task";
 
 /// A heading node in the document outline.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -81,6 +82,15 @@ pub enum RefTarget {
 pub struct DocIndex {
     pub anchors: HashMap<String, Anchor>,
     pub references: Vec<Reference>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Task {
+    pub range: Range<usize>,
+    pub title_range: Option<Range<usize>>,
+    pub title: String,
+    pub id: Option<String>,
+    pub done: Option<String>,
 }
 
 /// Protocol-agnostic diagnostics produced by djot analysis.
@@ -301,6 +311,72 @@ pub fn metadata_block(text: &str) -> Option<String> {
         }
     }
     None
+}
+
+pub fn tasks(text: &str) -> Vec<Task> {
+    let mut tasks = Vec::new();
+    let mut stack: Vec<TaskFrame> = Vec::new();
+
+    for (event, span) in Parser::new(text).into_offset_iter() {
+        match event {
+            Event::Start(Container::Div { class }, attrs) if class == TASK_CLASS => {
+                let done = attrs
+                    .get_value("done")
+                    .map(|value| value.to_string())
+                    .filter(|value| is_rfc3339_datetime(value));
+                stack.push(TaskFrame {
+                    range_start: span.start,
+                    id: attrs.get_value("id").map(|value| value.to_string()),
+                    done,
+                    capturing_title: false,
+                    captured_title: false,
+                    title_range: None,
+                    title: String::new(),
+                });
+            }
+            Event::Start(Container::Paragraph, _) => {
+                if let Some(frame) = stack.last_mut() {
+                    if !frame.capturing_title && !frame.captured_title {
+                        frame.capturing_title = true;
+                    }
+                }
+            }
+            Event::Str(s) => {
+                if let Some(frame) = stack.last_mut() {
+                    if frame.capturing_title {
+                        frame.title.push_str(&s);
+                        match &mut frame.title_range {
+                            Some(range) => range.end = span.end,
+                            None => frame.title_range = Some(span.clone()),
+                        }
+                    }
+                }
+            }
+            Event::Softbreak | Event::Hardbreak => {
+                if let Some(frame) = stack.last_mut() {
+                    if frame.capturing_title && !frame.title.is_empty() {
+                        frame.title.push(' ');
+                    }
+                }
+            }
+            Event::End(Container::Paragraph) => {
+                if let Some(frame) = stack.last_mut() {
+                    if frame.capturing_title {
+                        frame.capturing_title = false;
+                        frame.captured_title = true;
+                    }
+                }
+            }
+            Event::End(Container::Div { class }) if class == TASK_CLASS => {
+                if let Some(frame) = stack.pop() {
+                    tasks.push(frame.into_task(span.end));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    tasks
 }
 
 /// Classify a link destination string into a [`RefTarget`].
@@ -753,6 +829,89 @@ fn reference_target_path_range(
     Some(source.start + start..source.start + start + path.len())
 }
 
+fn is_rfc3339_datetime(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.len() < 20 {
+        return false;
+    }
+
+    if bytes.get(4) != Some(&b'-')
+        || bytes.get(7) != Some(&b'-')
+        || bytes.get(10) != Some(&b'T')
+        || bytes.get(13) != Some(&b':')
+        || bytes.get(16) != Some(&b':')
+    {
+        return false;
+    }
+
+    let Some(year) = parse_fixed_u32(value, 0, 4) else {
+        return false;
+    };
+    let Some(month) = parse_fixed_u32(value, 5, 7) else {
+        return false;
+    };
+    let Some(day) = parse_fixed_u32(value, 8, 10) else {
+        return false;
+    };
+    let Some(hour) = parse_fixed_u32(value, 11, 13) else {
+        return false;
+    };
+    let Some(minute) = parse_fixed_u32(value, 14, 16) else {
+        return false;
+    };
+    let Some(second) = parse_fixed_u32(value, 17, 19) else {
+        return false;
+    };
+
+    if year == 0
+        || !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || hour > 23
+        || minute > 59
+        || second > 60
+    {
+        return false;
+    }
+
+    let mut offset_start = 19;
+    if bytes.get(offset_start) == Some(&b'.') {
+        offset_start += 1;
+        let fraction_start = offset_start;
+        while bytes
+            .get(offset_start)
+            .is_some_and(|byte| byte.is_ascii_digit())
+        {
+            offset_start += 1;
+        }
+        if offset_start == fraction_start {
+            return false;
+        }
+    }
+
+    match bytes.get(offset_start) {
+        Some(b'Z') => offset_start + 1 == bytes.len(),
+        Some(b'+') | Some(b'-') => {
+            if offset_start + 6 != bytes.len() || bytes.get(offset_start + 3) != Some(&b':') {
+                return false;
+            }
+            let Some(offset_hour) = parse_fixed_u32(value, offset_start + 1, offset_start + 3)
+            else {
+                return false;
+            };
+            let Some(offset_minute) = parse_fixed_u32(value, offset_start + 4, offset_start + 6)
+            else {
+                return false;
+            };
+            offset_hour <= 23 && offset_minute <= 59
+        }
+        _ => false,
+    }
+}
+
+fn parse_fixed_u32(value: &str, start: usize, end: usize) -> Option<u32> {
+    value.get(start..end)?.parse().ok()
+}
+
 /// A djot section being assembled while walking the event stream.
 struct SectionFrame {
     range_start: usize,
@@ -768,6 +927,28 @@ struct HeadingAnchorFrame {
     id: String,
     start: usize,
     text_range: Option<Range<usize>>,
+}
+
+struct TaskFrame {
+    range_start: usize,
+    id: Option<String>,
+    done: Option<String>,
+    capturing_title: bool,
+    captured_title: bool,
+    title_range: Option<Range<usize>>,
+    title: String,
+}
+
+impl TaskFrame {
+    fn into_task(self, range_end: usize) -> Task {
+        Task {
+            range: self.range_start..range_end,
+            title_range: self.title_range,
+            title: self.title.trim().to_string(),
+            id: self.id,
+            done: self.done,
+        }
+    }
 }
 
 impl SectionFrame {
@@ -896,6 +1077,34 @@ mod tests {
         assert_eq!(metadata_block(text).as_deref(), Some("title = \"x\"\n"));
         // A plain code block is not metadata.
         assert_eq!(metadata_block("``` toml\ntitle = \"x\"\n```\n"), None);
+    }
+
+    #[test]
+    fn tasks_extract_task_divs() {
+        let text = "{#write-parser}\n{done=\"2026-06-19T21:30:00+08:00\"}\n::: task\nWrite parser.\n\nDetails.\n:::\n\n::: note\nNot a task.\n:::\n";
+        let found = tasks(text);
+
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].id.as_deref(), Some("write-parser"));
+        assert_eq!(found[0].done.as_deref(), Some("2026-06-19T21:30:00+08:00"));
+        assert_eq!(found[0].title, "Write parser.");
+        assert_eq!(
+            found[0]
+                .title_range
+                .clone()
+                .map(|range| text[range].to_string()),
+            Some("Write parser.".to_string())
+        );
+    }
+
+    #[test]
+    fn tasks_reject_date_only_done_values() {
+        let text = "{done=2026-06-19}\n::: task\nDate-only done.\n:::\n\n{done=\"2026-06-19T13:30:00Z\"}\n::: task\nDatetime done.\n:::\n";
+        let found = tasks(text);
+
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0].done, None);
+        assert_eq!(found[1].done.as_deref(), Some("2026-06-19T13:30:00Z"));
     }
 
     #[test]

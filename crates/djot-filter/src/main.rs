@@ -6,8 +6,8 @@ use std::process::{Command, ExitCode};
 use std::sync::Arc;
 
 use cel::{Context, ExecutionError, Program, Value};
-use clap::Parser;
-use djot_core::{metadata_block, resolve_target, Workspace};
+use clap::{Parser, Subcommand};
+use djot_core::{metadata_block, resolve_target, tasks, Task, Workspace};
 use skim::prelude::*;
 
 fn main() -> ExitCode {
@@ -21,6 +21,24 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+
+    if matches!(config.command, Some(CommandMode::Tasks)) {
+        let plan = match config.query.as_deref() {
+            Some(query) => match QueryPlan::compile(query) {
+                Ok(plan) => Some(plan),
+                Err(err) => {
+                    eprintln!("djot-filter: {err}");
+                    return ExitCode::FAILURE;
+                }
+            },
+            None => None,
+        };
+        if let Err(err) = print_tasks(&root, &docs, plan.as_ref()) {
+            eprintln!("djot-filter: {err}");
+            return ExitCode::FAILURE;
+        }
+        return ExitCode::SUCCESS;
+    }
 
     let mut paths = docs.paths.clone();
     if let Some(query) = &config.query {
@@ -68,7 +86,7 @@ fn main() -> ExitCode {
 )]
 struct Config {
     /// Directory to scan recursively. Defaults to the current directory.
-    #[arg(long, value_name = "DIR")]
+    #[arg(long, global = true, value_name = "DIR")]
     root: Option<PathBuf>,
 
     /// Re-filter results interactively with skim.
@@ -76,8 +94,17 @@ struct Config {
     interactive: bool,
 
     /// Keep files whose CEL predicate evaluates to true.
-    #[arg(long, value_name = "EXPR")]
+    #[arg(long, global = true, value_name = "EXPR")]
     query: Option<String>,
+
+    #[command(subcommand)]
+    command: Option<CommandMode>,
+}
+
+#[derive(Debug, Subcommand)]
+enum CommandMode {
+    /// Print tasks found in scanned Djot files.
+    Tasks,
 }
 
 struct LoadedDocs {
@@ -95,6 +122,12 @@ struct DocumentRecord<'a> {
     path: &'a Path,
     text: &'a str,
     reverse_references: &'a ReverseReferences,
+}
+
+struct TaskRecord<'a> {
+    path: &'a Path,
+    title: &'a str,
+    done: Option<&'a str>,
 }
 
 impl QueryPlan {
@@ -136,6 +169,25 @@ impl QueryPlan {
             Err(ExecutionError::NoSuchKey(_)) => Ok(false),
             Err(err) => Err(format!(
                 "cannot evaluate CEL query for {}: {err}",
+                record.path.display()
+            )),
+        }
+    }
+
+    fn matches_task(&self, record: TaskRecord<'_>) -> Result<bool, String> {
+        let mut context = Context::default();
+        context.add_variable_from_value("title", record.title.to_string());
+        context.add_variable_from_value("done", record.done.map(str::to_string));
+
+        match self.program.execute(&context) {
+            Ok(Value::Bool(value)) => Ok(value),
+            Ok(value) => Err(format!(
+                "CEL query must return bool, got {}",
+                value_type_name(&value)
+            )),
+            Err(ExecutionError::NoSuchKey(_)) => Ok(false),
+            Err(err) => Err(format!(
+                "cannot evaluate CEL query for task in {}: {err}",
                 record.path.display()
             )),
         }
@@ -553,6 +605,45 @@ fn editor_paths(root: &Path, selected: &[String]) -> Vec<PathBuf> {
         .collect()
 }
 
+fn print_tasks(root: &Path, docs: &LoadedDocs, plan: Option<&QueryPlan>) -> Result<(), String> {
+    for path in &docs.paths {
+        let Some(text) = docs.texts.get(path) else {
+            continue;
+        };
+        for task in tasks(text) {
+            if task_matches(root, path, &task, plan)? {
+                print_task(&task);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn task_matches(
+    _root: &Path,
+    path: &Path,
+    task: &Task,
+    plan: Option<&QueryPlan>,
+) -> Result<bool, String> {
+    let Some(plan) = plan else {
+        return Ok(true);
+    };
+    plan.matches_task(TaskRecord {
+        path,
+        title: &task.title,
+        done: task.done.as_deref(),
+    })
+}
+
+fn print_task(task: &Task) {
+    println!("{}", task_line(task));
+}
+
+fn task_line(task: &Task) -> String {
+    let marker = if task.done.is_some() { "o" } else { "-" };
+    format!("{marker} {}", task.title)
+}
+
 fn print_paths(paths: impl IntoIterator<Item = String>) {
     for path in paths {
         println!("{path}");
@@ -612,8 +703,25 @@ mod tests {
             root: None,
             interactive: false,
             query: None,
+            command: None,
         };
         assert_eq!(default_root(&config), absolute_path(Path::new(".")));
+    }
+
+    #[test]
+    fn tasks_subcommand_accepts_root_and_query_after_subcommand() {
+        let config = Config::parse_from([
+            "djot-filter",
+            "tasks",
+            "--root",
+            "notes",
+            "--query",
+            "done == null",
+        ]);
+
+        assert!(matches!(config.command, Some(CommandMode::Tasks)));
+        assert_eq!(config.root.as_deref(), Some(Path::new("notes")));
+        assert_eq!(config.query.as_deref(), Some("done == null"));
     }
 
     #[test]
@@ -665,6 +773,32 @@ mod tests {
                 normalize(&root.join("topic.dj")),
             ]
         );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn task_query_matches_title_and_done() {
+        let root = unique_test_dir("djot-filter-task-query-test");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("tasks.dj"),
+            "::: task\nOpen task\n:::\n\n{done=\"2026-06-19T21:30:00+08:00\"}\n::: task\nDone task\n:::\n",
+        )
+        .unwrap();
+
+        let docs = load_docs(&root).unwrap();
+        let path = normalize(&root.join("tasks.dj"));
+        let text = docs.texts.get(&path).unwrap();
+        let found = tasks(text);
+        let open = QueryPlan::compile("done == null").unwrap();
+        let done = QueryPlan::compile("done != null && title.matches('Done')").unwrap();
+
+        assert!(task_matches(&root, &path, &found[0], Some(&open)).unwrap());
+        assert!(!task_matches(&root, &path, &found[1], Some(&open)).unwrap());
+        assert!(task_matches(&root, &path, &found[1], Some(&done)).unwrap());
+        assert_eq!(task_line(&found[0]), "- Open task");
+        assert_eq!(task_line(&found[1]), "o Done task");
 
         let _ = std::fs::remove_dir_all(root);
     }
