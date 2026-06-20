@@ -109,31 +109,34 @@ support.
 - [ ] Extract tasks from `task` divs:
 
   ```` djot
-  {#write-task-model done="2026-06-19T21:30:00+08:00"}
+  {#write-task-model created="2026-06-18T09:00:00+08:00" done="2026-06-19T21:30:00+08:00"}
   ::: task
   Define the first task semantic model.
 
-  It should keep completion metadata separate from the task body.
+  It should keep task metadata separate from the task body.
   :::
   ````
 
   - [ ] identify `Container::Div { class: "task" }` as a task
+  - [ ] parse `created` only as a quoted RFC 3339 datetime
   - [ ] treat absence of `done` as unfinished
   - [ ] treat presence of `done` as complete
   - [ ] parse `done` only as a quoted RFC 3339 datetime
-  - [ ] report invalid `done` values as semantic diagnostics
-  - [ ] capture the task range, optional id, done value, title range, and body
-    range
+  - [ ] report invalid `created` and `done` values as semantic diagnostics
+  - [ ] capture the task range, optional id, created value, done value, title
+    range, and body range
   - [ ] use the first paragraph as the title and later blocks as details
   - [ ] expose tasks through `djot-core` without adding LSP-specific types
 
 - [ ] Add editor/tooling affordances once the core task model exists:
 
-  - [ ] hover summary for completion state, id, done datetime, and title
+  - [ ] hover summary for completion state, id, created datetime, done datetime,
+    and title
   - [ ] document symbols for tasks
   - [ ] code action to add/remove `done`
   - [ ] code action to convert a native Djot task list item into a task div
-  - [ ] filter tasks by completion state and done datetime in `djot-filter`
+  - [ ] filter tasks by completion state, created datetime, and done datetime in
+    `djot-filter`
 
 # Notes
 

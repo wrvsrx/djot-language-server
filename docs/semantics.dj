@@ -122,12 +122,12 @@ Optional details.
 :::
 ````
 
-Tasks are unfinished by default. A task is complete when the div has a `done`
-attribute:
+Tasks are unfinished by default. A task can record when it was created with a
+`created` attribute. A task is complete when the div has a `done` attribute:
 
 ```` djot
 {#write-task-parser}
-{done="2026-06-19T21:30:00+08:00"}
+{created="2026-06-18T09:00:00+08:00" done="2026-06-19T21:30:00+08:00"}
 ::: task
 Write the task parser.
 
@@ -135,9 +135,10 @@ Optional details.
 :::
 ````
 
-The `done` value must be a quoted RFC 3339 datetime. Date-only values such as
-`done=2026-06-19`, quoted date-only values such as `done="2026-06-19"`, and
-non-RFC-3339 datetime strings are invalid task metadata.
+The `created` and `done` values must be quoted RFC 3339 datetimes. Date-only
+values such as `done=2026-06-19`, quoted date-only values such as
+`done="2026-06-19"`, and non-RFC-3339 datetime strings are invalid task
+metadata.
 
 The task id is optional. When present, it is just the normal Djot explicit id
 for the div, so the task also defines an anchor and can be targeted by regular
@@ -145,6 +146,7 @@ Djot links.
 
 Current task fields are intentionally minimal:
 
+- `created`: an RFC 3339 datetime string recording when the task was created.
 - `done`: an RFC 3339 datetime string recording when the task was completed.
 
 No other task metadata fields are currently defined. In particular, `status`,
@@ -163,7 +165,7 @@ task metadata:
 - missing same-document anchors (`#id`)
 - missing `.dj` or `.djot` target files
 - missing anchors in `.dj` or `.djot` target files
-- task `done` attributes that are not quoted RFC 3339 datetimes
+- task `created` or `done` attributes that are not quoted RFC 3339 datetimes
 
 External URLs, non-Djot file links, and directory links are outside these
 reference diagnostics.

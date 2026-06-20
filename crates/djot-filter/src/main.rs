@@ -135,6 +135,7 @@ struct DocumentRecord<'a> {
 struct TaskRecord<'a> {
     path: &'a Path,
     title: &'a str,
+    created: Option<&'a str>,
     done: Option<&'a str>,
 }
 
@@ -185,6 +186,7 @@ impl QueryPlan {
     fn matches_task(&self, record: TaskRecord<'_>) -> Result<bool, String> {
         let mut context = Context::default();
         context.add_variable_from_value("title", record.title.to_string());
+        context.add_variable_from_value("created", record.created.map(str::to_string));
         context.add_variable_from_value("done", record.done.map(str::to_string));
 
         match self.program.execute(&context) {
@@ -639,6 +641,7 @@ fn task_matches(
     plan.matches_task(TaskRecord {
         path,
         title: &task.title,
+        created: task.created.as_deref(),
         done: task.done.as_deref(),
     })
 }
@@ -811,12 +814,12 @@ mod tests {
     }
 
     #[test]
-    fn task_query_matches_title_and_done() {
+    fn task_query_matches_title_created_and_done() {
         let root = unique_test_dir("djot-filter-task-query-test");
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(
             root.join("tasks.dj"),
-            "::: task\nOpen task\n:::\n\n{done=\"2026-06-19T21:30:00+08:00\"}\n::: task\nDone task\n:::\n",
+            "{created=\"2026-06-18T09:00:00+08:00\"}\n::: task\nOpen task\n:::\n\n{created=\"2026-06-19T09:00:00+08:00\" done=\"2026-06-19T21:30:00+08:00\"}\n::: task\nDone task\n:::\n",
         )
         .unwrap();
 
@@ -825,10 +828,13 @@ mod tests {
         let text = docs.texts.get(&path).unwrap();
         let found = tasks(text);
         let open = QueryPlan::compile("done == null").unwrap();
+        let created = QueryPlan::compile("created == '2026-06-18T09:00:00+08:00'").unwrap();
         let done = QueryPlan::compile("done != null && title.matches('Done')").unwrap();
 
         assert!(task_matches(&root, &path, &found[0], Some(&open)).unwrap());
         assert!(!task_matches(&root, &path, &found[1], Some(&open)).unwrap());
+        assert!(task_matches(&root, &path, &found[0], Some(&created)).unwrap());
+        assert!(!task_matches(&root, &path, &found[1], Some(&created)).unwrap());
         assert!(task_matches(&root, &path, &found[1], Some(&done)).unwrap());
         assert_eq!(task_line(&found[0]), "- Open task");
         assert_eq!(task_line(&found[1]), "o Done task");

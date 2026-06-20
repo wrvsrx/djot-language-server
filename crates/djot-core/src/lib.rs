@@ -90,6 +90,7 @@ pub struct Task {
     pub title_range: Option<Range<usize>>,
     pub title: String,
     pub id: Option<String>,
+    pub created: Option<String>,
     pub done: Option<String>,
 }
 
@@ -320,6 +321,10 @@ pub fn tasks(text: &str) -> Vec<Task> {
     for (event, span) in Parser::new(text).into_offset_iter() {
         match event {
             Event::Start(Container::Div { class }, attrs) if class == TASK_CLASS => {
+                let created = attrs
+                    .get_value("created")
+                    .map(|value| value.to_string())
+                    .filter(|value| is_rfc3339_datetime(value));
                 let done = attrs
                     .get_value("done")
                     .map(|value| value.to_string())
@@ -327,6 +332,7 @@ pub fn tasks(text: &str) -> Vec<Task> {
                 stack.push(TaskFrame {
                     range_start: span.start,
                     id: attrs.get_value("id").map(|value| value.to_string()),
+                    created,
                     done,
                     capturing_title: false,
                     captured_title: false,
@@ -932,6 +938,7 @@ struct HeadingAnchorFrame {
 struct TaskFrame {
     range_start: usize,
     id: Option<String>,
+    created: Option<String>,
     done: Option<String>,
     capturing_title: bool,
     captured_title: bool,
@@ -946,6 +953,7 @@ impl TaskFrame {
             title_range: self.title_range,
             title: self.title.trim().to_string(),
             id: self.id,
+            created: self.created,
             done: self.done,
         }
     }
@@ -1081,11 +1089,15 @@ mod tests {
 
     #[test]
     fn tasks_extract_task_divs() {
-        let text = "{#write-parser}\n{done=\"2026-06-19T21:30:00+08:00\"}\n::: task\nWrite parser.\n\nDetails.\n:::\n\n::: note\nNot a task.\n:::\n";
+        let text = "{#write-parser}\n{created=\"2026-06-18T09:00:00+08:00\" done=\"2026-06-19T21:30:00+08:00\"}\n::: task\nWrite parser.\n\nDetails.\n:::\n\n::: note\nNot a task.\n:::\n";
         let found = tasks(text);
 
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].id.as_deref(), Some("write-parser"));
+        assert_eq!(
+            found[0].created.as_deref(),
+            Some("2026-06-18T09:00:00+08:00")
+        );
         assert_eq!(found[0].done.as_deref(), Some("2026-06-19T21:30:00+08:00"));
         assert_eq!(found[0].title, "Write parser.");
         assert_eq!(
@@ -1098,12 +1110,14 @@ mod tests {
     }
 
     #[test]
-    fn tasks_reject_date_only_done_values() {
-        let text = "{done=2026-06-19}\n::: task\nDate-only done.\n:::\n\n{done=\"2026-06-19T13:30:00Z\"}\n::: task\nDatetime done.\n:::\n";
+    fn tasks_reject_date_only_datetime_attributes() {
+        let text = "{created=\"2026-06-18\" done=2026-06-19}\n::: task\nDate-only metadata.\n:::\n\n{created=\"2026-06-18T09:00:00Z\" done=\"2026-06-19T13:30:00Z\"}\n::: task\nDatetime metadata.\n:::\n";
         let found = tasks(text);
 
         assert_eq!(found.len(), 2);
+        assert_eq!(found[0].created, None);
         assert_eq!(found[0].done, None);
+        assert_eq!(found[1].created.as_deref(), Some("2026-06-18T09:00:00Z"));
         assert_eq!(found[1].done.as_deref(), Some("2026-06-19T13:30:00Z"));
     }
 
