@@ -54,7 +54,12 @@ actions. `djot-ls` should offer "Convert to task div".
 - [ ] Convert this line into a task div.
 
 After applying the action, the result should look like a list item carrying a
-`created` timestamp and containing a `task` div.
+`created` timestamp and containing a `task` div, like this:
+
+- {created="2026-06-20T02:39:51Z"}
+  ::: task
+  Convert this line into a task div.
+  :::
 
 Place the cursor inside this unfinished task div and ask for code actions.
 `djot-ls` should offer "Mark task done", inserting a `done` timestamp before

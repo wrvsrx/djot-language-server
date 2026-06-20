@@ -1138,7 +1138,8 @@ fn task_completion_edit(text: &str, offset: usize, done: &str) -> Option<TaskCom
     let task = tasks(text).into_iter().find(|task| {
         task.done.is_none() && task.range.start <= offset && offset <= task.range.end
     })?;
-    let (line_start, line_end) = line_bounds(text, task.range.start)?;
+    let line_start = task_opening_fence_line_start(text, &task.range)?;
+    let (_, line_end) = line_bounds(text, line_start)?;
     let line = text.get(line_start..line_end)?;
     let indent_len = line
         .char_indices()
@@ -1151,6 +1152,22 @@ fn task_completion_edit(text: &str, offset: usize, done: &str) -> Option<TaskCom
         insert: line_start..line_start,
         new_text: format!("{indent}{{done=\"{done}\"}}\n"),
     })
+}
+
+fn task_opening_fence_line_start(text: &str, range: &ByteRange<usize>) -> Option<usize> {
+    let mut offset = range.start;
+    while offset <= range.end {
+        let (line_start, line_end) = line_bounds(text, offset)?;
+        let line = text.get(line_start..line_end)?;
+        if line.trim_start().starts_with("::: task") {
+            return Some(line_start);
+        }
+        if line_end >= range.end || line_end == text.len() {
+            break;
+        }
+        offset = line_end + '\n'.len_utf8();
+    }
+    None
 }
 
 fn line_bounds(text: &str, offset: usize) -> Option<(usize, usize)> {
