@@ -23,7 +23,9 @@
             packages.default = pkgs.callPackage ./default.nix {
               inherit craneLib;
             };
-            devShells.default = pkgs.callPackage ./shell.nix { };
+            devShells.default = pkgs.callPackage ./shell.nix {
+              inherit craneLib;
+            };
             formatter = pkgs.nixfmt-rfc-style;
           };
       }
