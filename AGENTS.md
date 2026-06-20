@@ -25,7 +25,8 @@ This is a **Cargo workspace** (`crates/*`) so the djot semantics can be shared b
 - `docs/semantics.dj` describes the current project semantics layered on top of
   Djot syntax.
 - `flake.nix` packages the workspace binaries as the `djot-tools` Nix package
-  with crane. The version is read from `Cargo.toml` with `builtins.fromTOML`.
+  with `buildRustPackage`. The version is read from `Cargo.toml` with
+  `builtins.fromTOML`.
 - `examples/*.dj` are small manual test fixtures for outlines, links, and
   article-style documents.
 - `dev/` contains editor/dev helpers: Neovim LSP config, README export Lua

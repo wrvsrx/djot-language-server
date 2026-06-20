@@ -5,7 +5,6 @@
     nur-wrvsrx.url = "github:wrvsrx/nur-packages";
     nixpkgs.follows = "nur-wrvsrx/nixpkgs";
     flake-parts.follows = "nur-wrvsrx/flake-parts";
-    crane.url = "github:ipetkov/crane";
   };
 
   outputs =
@@ -17,15 +16,18 @@
         perSystem =
           { pkgs, ... }:
           let
-            craneLib = inputs.crane.mkLib pkgs;
             cargoToml = builtins.fromTOML (builtins.readFile ./Cargo.toml);
           in
           {
-            packages.default = craneLib.buildPackage {
+            packages.default = pkgs.rustPlatform.buildRustPackage {
               pname = "djot-tools";
               version = cargoToml.workspace.package.version;
 
-              src = craneLib.cleanCargoSource ./.;
+              src = pkgs.lib.cleanSource ./.;
+
+              cargoLock = {
+                lockFile = ./Cargo.lock;
+              };
 
               meta = {
                 description = "Language server and tools for Djot documents";
@@ -33,7 +35,13 @@
                 mainProgram = "djot-ls";
               };
             };
-            devShells.default = craneLib.devShell { };
+            devShells.default = pkgs.mkShell {
+              packages = with pkgs; [
+                cargo
+                rustc
+                rustfmt
+              ];
+            };
             formatter = pkgs.nixfmt-rfc-style;
           };
       }
