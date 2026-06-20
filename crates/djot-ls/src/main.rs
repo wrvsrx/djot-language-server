@@ -791,6 +791,24 @@ impl ServerState {
             params.context.only.as_deref(),
             &CodeActionKind::REFACTOR_REWRITE,
         ) {
+            if let Some(insertion) = metadata_insertion(&entry.text, offset, &path) {
+                let range = byte_range_to_lsp(&entry.text, &insertion.insert);
+                let edit = WorkspaceEdit::new(HashMap::from([(
+                    params.text_document.uri.clone(),
+                    vec![TextEdit::new(range, insertion.new_text)],
+                )]));
+                actions.push(CodeActionOrCommand::CodeAction(CodeAction {
+                    title: "Add metadata".to_string(),
+                    kind: Some(CodeActionKind::REFACTOR_REWRITE),
+                    diagnostics: None,
+                    edit: Some(edit),
+                    command: None,
+                    is_preferred: Some(false),
+                    disabled: None,
+                    data: None,
+                }));
+            }
+
             if let Some(conversion) =
                 task_list_item_conversion(&entry.text, offset, &created_timestamp())
             {
@@ -924,6 +942,11 @@ struct TaskListItemConversion {
 }
 
 struct TaskCompletionEdit {
+    insert: ByteRange<usize>,
+    new_text: String,
+}
+
+struct MetadataInsertion {
     insert: ByteRange<usize>,
     new_text: String,
 }
@@ -1152,6 +1175,46 @@ fn task_completion_edit(text: &str, offset: usize, done: &str) -> Option<TaskCom
         insert: line_start..line_start,
         new_text: format!("{indent}{{done=\"{done}\"}}\n"),
     })
+}
+
+fn metadata_insertion(text: &str, offset: usize, path: &Path) -> Option<MetadataInsertion> {
+    if metadata_block(text).is_some() || !text.get(..offset)?.trim().is_empty() {
+        return None;
+    }
+
+    Some(MetadataInsertion {
+        insert: 0..0,
+        new_text: format!(
+            "{{.metadata}}\n``` toml\ntitle = \"{}\"\n```\n\n",
+            escape_toml_string(&default_metadata_title(path))
+        ),
+    })
+}
+
+fn default_metadata_title(path: &Path) -> String {
+    path.file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.is_empty())
+        .unwrap_or("Untitled")
+        .to_string()
+}
+
+fn escape_toml_string(value: &str) -> String {
+    let mut escaped = String::new();
+    for c in value.chars() {
+        match c {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            c if c.is_control() => {
+                escaped.push_str(&format!("\\u{:04X}", c as u32));
+            }
+            c => escaped.push(c),
+        }
+    }
+    escaped
 }
 
 fn task_opening_fence_line_start(text: &str, range: &ByteRange<usize>) -> Option<usize> {

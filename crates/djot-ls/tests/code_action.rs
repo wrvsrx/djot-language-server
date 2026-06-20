@@ -7,6 +7,101 @@ use serde_json::json;
 use support::run_session;
 
 #[test]
+fn code_action_adds_metadata_at_start() {
+    let doc = "\n\n# Heading\n";
+    let msgs = [
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{},"processId":null,"rootUri":null}}),
+        json!({"jsonrpc":"2.0","method":"initialized","params":{}}),
+        json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///notes/my-note.dj","languageId":"djot","version":1,"text":doc}}}),
+        json!({"jsonrpc":"2.0","id":2,"method":"textDocument/codeAction",
+        "params":{
+            "textDocument":{"uri":"file:///notes/my-note.dj"},
+            "range":{"start":{"line":1,"character":0},"end":{"line":1,"character":0}},
+            "context":{"diagnostics":[],"only":["refactor.rewrite"]}
+        }}),
+        json!({"jsonrpc":"2.0","id":3,"method":"shutdown","params":null}),
+        json!({"jsonrpc":"2.0","method":"exit","params":null}),
+    ];
+
+    let responses = run_session(&msgs);
+    let actions = responses
+        .iter()
+        .find(|m| m["id"] == json!(2))
+        .expect("no codeAction response")["result"]
+        .as_array()
+        .expect("result is not an array");
+    assert_eq!(actions.len(), 1);
+
+    let action = &actions[0];
+    assert_eq!(action["title"], json!("Add metadata"));
+    assert_eq!(action["kind"], json!("refactor.rewrite"));
+
+    let edit = &action["edit"]["changes"]["file:///notes/my-note.dj"][0];
+    assert_eq!(
+        edit["range"],
+        json!({"start":{"line":0,"character":0},"end":{"line":0,"character":0}})
+    );
+    assert_eq!(
+        edit["newText"],
+        json!("{.metadata}\n``` toml\ntitle = \"my-note\"\n```\n\n")
+    );
+}
+
+#[test]
+fn code_action_does_not_add_metadata_after_existing_block() {
+    let doc = "# Heading\n\nBody\n";
+    let msgs = [
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{},"processId":null,"rootUri":null}}),
+        json!({"jsonrpc":"2.0","method":"initialized","params":{}}),
+        json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///notes/my-note.dj","languageId":"djot","version":1,"text":doc}}}),
+        json!({"jsonrpc":"2.0","id":2,"method":"textDocument/codeAction",
+        "params":{
+            "textDocument":{"uri":"file:///notes/my-note.dj"},
+            "range":{"start":{"line":2,"character":0},"end":{"line":2,"character":0}},
+            "context":{"diagnostics":[],"only":["refactor.rewrite"]}
+        }}),
+        json!({"jsonrpc":"2.0","id":3,"method":"shutdown","params":null}),
+        json!({"jsonrpc":"2.0","method":"exit","params":null}),
+    ];
+
+    let responses = run_session(&msgs);
+    let actions = responses
+        .iter()
+        .find(|m| m["id"] == json!(2))
+        .expect("no codeAction response")["result"]
+        .as_array()
+        .expect("result is not an array");
+    assert!(actions.is_empty());
+}
+
+#[test]
+fn code_action_does_not_add_metadata_when_metadata_exists() {
+    let doc = "{.metadata}\n``` toml\ntitle = \"Existing\"\n```\n\n# Heading\n";
+    let msgs = [
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{},"processId":null,"rootUri":null}}),
+        json!({"jsonrpc":"2.0","method":"initialized","params":{}}),
+        json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///notes/my-note.dj","languageId":"djot","version":1,"text":doc}}}),
+        json!({"jsonrpc":"2.0","id":2,"method":"textDocument/codeAction",
+        "params":{
+            "textDocument":{"uri":"file:///notes/my-note.dj"},
+            "range":{"start":{"line":0,"character":0},"end":{"line":0,"character":0}},
+            "context":{"diagnostics":[],"only":["refactor.rewrite"]}
+        }}),
+        json!({"jsonrpc":"2.0","id":3,"method":"shutdown","params":null}),
+        json!({"jsonrpc":"2.0","method":"exit","params":null}),
+    ];
+
+    let responses = run_session(&msgs);
+    let actions = responses
+        .iter()
+        .find(|m| m["id"] == json!(2))
+        .expect("no codeAction response")["result"]
+        .as_array()
+        .expect("result is not an array");
+    assert!(actions.is_empty());
+}
+
+#[test]
 fn code_action_converts_native_task_list_item_to_task_div() {
     let doc = "# Tasks\n\n- [ ] Write parser.\n";
     let msgs = [
