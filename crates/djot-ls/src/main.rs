@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsString;
 use std::ops::{ControlFlow, Range as ByteRange};
 use std::path::{Component, Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_lsp::client_monitor::ClientProcessMonitorLayer;
 use async_lsp::concurrency::ConcurrencyLayer;
@@ -17,13 +18,15 @@ use djot_core::{
 use futures::future::BoxFuture;
 use jotdown::{Container, Event, Parser};
 use lsp_types::{
-    CompletionItem, CompletionItemKind, CompletionOptions, CompletionParams, CompletionResponse,
-    CompletionTextEdit, Diagnostic, DiagnosticSeverity, DidChangeConfigurationParams,
-    DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
-    DidSaveTextDocumentParams, DocumentChangeOperation, DocumentChanges, DocumentSymbol,
-    DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse,
-    Hover, HoverContents, HoverParams, HoverProviderCapability, InitializeParams, InitializeResult,
-    InitializedParams, Location, MarkupContent, MarkupKind, NumberOrString, OneOf,
+    CodeAction, CodeActionKind, CodeActionOptions, CodeActionOrCommand, CodeActionParams,
+    CodeActionProviderCapability, CodeActionResponse, CompletionItem, CompletionItemKind,
+    CompletionOptions, CompletionParams, CompletionResponse, CompletionTextEdit, Diagnostic,
+    DiagnosticSeverity, DidChangeConfigurationParams, DidChangeTextDocumentParams,
+    DidCloseTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
+    DocumentChangeOperation, DocumentChanges, DocumentSymbol, DocumentSymbolParams,
+    DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents,
+    HoverParams, HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams,
+    Location, MarkupContent, MarkupKind, NumberOrString, OneOf,
     OptionalVersionedTextDocumentIdentifier, Position, PrepareRenameResponse, ProgressParams,
     ProgressParamsValue, PublishDiagnosticsParams, Range, ReferenceParams, RenameFile,
     RenameFileOptions, RenameOptions, RenameParams, ResourceOp, ResourceOperationKind,
@@ -97,6 +100,13 @@ impl LanguageServer for ServerState {
                         work_done_progress_options: WorkDoneProgressOptions::default(),
                         completion_item: None,
                     }),
+                    code_action_provider: Some(CodeActionProviderCapability::Options(
+                        CodeActionOptions {
+                            code_action_kinds: Some(vec![CodeActionKind::REFACTOR_REWRITE]),
+                            resolve_provider: Some(false),
+                            work_done_progress_options: WorkDoneProgressOptions::default(),
+                        },
+                    )),
                     ..ServerCapabilities::default()
                 },
                 server_info: None,
@@ -225,6 +235,14 @@ impl LanguageServer for ServerState {
         let pos = params.text_document_position;
         let completions = self.resolve_completion(&pos.text_document.uri, pos.position);
         Box::pin(async move { Ok(completions.map(CompletionResponse::Array)) })
+    }
+
+    fn code_action(
+        &mut self,
+        params: CodeActionParams,
+    ) -> BoxFuture<'static, Result<Option<CodeActionResponse>, Self::Error>> {
+        let actions = self.resolve_code_actions(&params);
+        Box::pin(async move { Ok(actions) })
     }
 
     fn prepare_rename(
@@ -760,6 +778,36 @@ impl ServerState {
         Some(items)
     }
 
+    fn resolve_code_actions(&self, params: &CodeActionParams) -> Option<CodeActionResponse> {
+        if !requested_code_action_kind_matches(
+            params.context.only.as_deref(),
+            &CodeActionKind::REFACTOR_REWRITE,
+        ) {
+            return Some(Vec::new());
+        }
+
+        let path = params.text_document.uri.to_file_path().ok()?;
+        let entry = self.workspace.get(&path)?;
+        let offset = position_to_offset(&entry.text, params.range.start);
+        let conversion = task_list_item_conversion(&entry.text, offset, &created_timestamp())?;
+        let range = byte_range_to_lsp(&entry.text, &conversion.replace);
+        let edit = WorkspaceEdit::new(HashMap::from([(
+            params.text_document.uri.clone(),
+            vec![TextEdit::new(range, conversion.replacement)],
+        )]));
+
+        Some(vec![CodeActionOrCommand::CodeAction(CodeAction {
+            title: "Convert to task div".to_string(),
+            kind: Some(CodeActionKind::REFACTOR_REWRITE),
+            diagnostics: None,
+            edit: Some(edit),
+            command: None,
+            is_preferred: Some(true),
+            disabled: None,
+            data: None,
+        })])
+    }
+
     fn workspace_link_targets(&self, from: &Path) -> Vec<LinkTargetCompletion> {
         let mut targets: Vec<_> = self
             .workspace
@@ -836,6 +884,11 @@ struct LinkTargetCompletion {
 struct AnchorCompletion {
     id: String,
     path: String,
+}
+
+struct TaskListItemConversion {
+    replace: ByteRange<usize>,
+    replacement: String,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1014,6 +1067,94 @@ fn label_completion_replace_end(text: &str, offset: usize, limit: usize) -> usiz
     } else {
         offset
     }
+}
+
+fn task_list_item_conversion(
+    text: &str,
+    offset: usize,
+    created: &str,
+) -> Option<TaskListItemConversion> {
+    let (line_start, line_end) = line_bounds(text, offset)?;
+    let line = text.get(line_start..line_end)?;
+    let content = line.strip_suffix('\r').unwrap_or(line);
+    let indent_len = content
+        .char_indices()
+        .find(|(_, c)| *c != ' ' && *c != '\t')
+        .map(|(i, _)| i)
+        .unwrap_or(content.len());
+    let indent = &content[..indent_len];
+    let rest = &content[indent_len..];
+    let title = rest.strip_prefix("- [ ] ")?.trim();
+    if title.is_empty() {
+        return None;
+    }
+
+    Some(TaskListItemConversion {
+        replace: line_start..line_end,
+        replacement: format!(
+            "{indent}{{created=\"{created}\"}}\n{indent}::: task\n{indent}{title}\n{indent}:::"
+        ),
+    })
+}
+
+fn line_bounds(text: &str, offset: usize) -> Option<(usize, usize)> {
+    if offset > text.len() {
+        return None;
+    }
+    let start = text[..offset].rfind('\n').map_or(0, |i| i + 1);
+    let end = text[offset..].find('\n').map_or(text.len(), |i| offset + i);
+    Some((start, end))
+}
+
+fn requested_code_action_kind_matches(
+    only: Option<&[CodeActionKind]>,
+    action_kind: &CodeActionKind,
+) -> bool {
+    let Some(only) = only else {
+        return true;
+    };
+    only.iter()
+        .any(|requested| code_action_kind_includes(requested, action_kind))
+}
+
+fn code_action_kind_includes(requested: &CodeActionKind, action_kind: &CodeActionKind) -> bool {
+    let requested = requested.as_str();
+    let action_kind = action_kind.as_str();
+    action_kind == requested
+        || action_kind
+            .strip_prefix(requested)
+            .is_some_and(|suffix| suffix.starts_with('.'))
+}
+
+fn created_timestamp() -> String {
+    rfc3339_utc(SystemTime::now())
+}
+
+fn rfc3339_utc(time: SystemTime) -> String {
+    let duration = time.duration_since(UNIX_EPOCH).unwrap_or_default();
+    let total_seconds = duration.as_secs();
+    let days = (total_seconds / 86_400) as i64;
+    let seconds_of_day = total_seconds % 86_400;
+    let (year, month, day) = civil_from_days(days);
+    let hour = seconds_of_day / 3_600;
+    let minute = (seconds_of_day % 3_600) / 60;
+    let second = seconds_of_day % 60;
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
+}
+
+fn civil_from_days(days_since_epoch: i64) -> (i64, u32, u32) {
+    let z = days_since_epoch + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let day_of_era = z - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
+    let year = year + if month <= 2 { 1 } else { 0 };
+    (year, month as u32, day as u32)
 }
 
 fn str_event_touching_cursor(text: &str, offset: usize) -> Option<ByteRange<usize>> {

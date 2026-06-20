@@ -134,7 +134,7 @@ support.
     and title
   - [ ] document symbols for tasks
   - [ ] code action to add/remove `done`
-  - [ ] code action to convert a native Djot task list item into a task div
+  - [x] code action to convert a native Djot task list item into a task div
   - [ ] filter tasks by completion state, created datetime, and done datetime in
     `djot-filter`
 
