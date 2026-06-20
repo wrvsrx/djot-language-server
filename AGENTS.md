@@ -111,6 +111,18 @@ operations should follow naturally from the semantic model. Future plans and
 unimplemented semantics, including task/note semantics, belong in
 `docs/plan.dj`.
 
+## Roadmap documentation
+
+`docs/plan.dj` is a roadmap, not user documentation. Keep it DRY:
+
+- current command usage and examples belong in `README.dj` (then regenerate
+  `README.md`);
+- currently implemented Djot conventions and shared semantics belong in
+  `docs/semantics.dj`;
+- `docs/plan.dj` should link to those documents for current behavior and keep
+  only future work, open design questions, or very brief completed-status
+  markers when useful for roadmap context.
+
 ## Build gotcha: do not bump tokio
 
 The crates index mirror in this environment lags and lacks `tokio-macros 2.7.0`, so resolving tokio ≥ 1.52 fails. `Cargo.toml` allows `tokio = "1.51.0"` (caret) but `Cargo.lock` holds it at exactly 1.51.0. **Do not run `cargo update` / `cargo update -p tokio` expecting a newer tokio** — it will try 1.52.x and fail. Keep the locked 1.51.0 until the mirror catches up.

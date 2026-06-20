@@ -3,6 +3,11 @@
 title = "plan"
 ```
 
+This file is a roadmap, not user documentation. Current command usage lives in
+[the README](../README.dj), and implemented Djot conventions live in
+[semantics](semantics.dj). Keep completed behavior here brief so the docs do not
+drift.
+
 # Features
 
 - [ ] `textDocument/documentSymbol`
@@ -60,43 +65,22 @@ title = "plan"
 
 # Export
 
-`djot-export`: djot -> pandoc JSON AST (`djot-export doc.dj | pandoc -f json ...`).
+Current `djot-export` usage and behavior are documented in
+[the README](../README.dj#Export). Remaining work:
 
-- [x] common block/inline subset -> pandoc nodes
-- [x] fold `{.metadata}` toml into pandoc `Meta` (preserved, not dropped)
 - [ ] broaden coverage: tables, footnotes, definition lists, images,
   attribute (id/class) passthrough
 - [ ] richer metadata: render `author`/`date` (e.g. a byline), nested tables
 
 # Filter
 
-`djot-filter`: scan a workspace of Djot documents and select files by references,
-metadata, text, and future semantic fields.
+Current `djot-filter` usage and query context are documented in
+[the README](../README.dj#Filter). Remaining work:
 
-- [x] filter by referenced documents through CEL (`directly_referenced_by`,
-  `transitively_referenced_by`)
-- [x] filter by title through CEL (`title`)
-- [x] interactive selection with in-memory preview and file creation
-- [x] add a CEL-based query predicate (`--query EXPR`) instead of designing a
-  project-specific query language from scratch
-
-  ``` sh
-  djot-filter notes --query 'path.startsWith("docs/") && title.matches("semantics")'
-  djot-filter notes --query '"index.dj" in directly_referenced_by'
-  djot-filter notes --query '"index.dj" in transitively_referenced_by'
-  ```
-
-  - [x] expose a conservative document record to CEL (`path`, `title`,
-    `directly_referenced_by`, `transitively_referenced_by`)
-  - [x] compile the CEL expression once, then evaluate it against each candidate
-    document
-  - [ ] keep existing flags as stable shorthand for common filters
-  - [x] start with an O(n) scan over loaded documents; parsing/indexing and file
-    I/O are expected to dominate at current scales
-  - [x] structure the implementation as a query plan so future indexed
-    prefilters can narrow candidates before full CEL evaluation
-  - [ ] consider indexed prefilters for path prefixes, titles, direct referrers,
-    and transitive referrers
+- [ ] keep stable shorthand flags for common filters if repeated CEL queries
+  become too noisy
+- [ ] consider indexed prefilters for path prefixes, titles, direct referrers,
+  and transitive referrers
 
 # Future: note/task tooling
 
@@ -105,28 +89,6 @@ on top of normal Djot syntax. Notes are the source of truth; taskwarrior or
 calendar synchronization is not a goal for now. Current task semantics are
 defined in [semantics](semantics.dj#Tasks); future work here is implementation and editor
 support.
-
-- [ ] Extract tasks from `task` divs:
-
-  ```` djot
-  {#write-task-model created="2026-06-18T09:00:00+08:00" done="2026-06-19T21:30:00+08:00"}
-  ::: task
-  Define the first task semantic model.
-
-  It should keep task metadata separate from the task body.
-  :::
-  ````
-
-  - [ ] identify `Container::Div { class: "task" }` as a task
-  - [ ] parse `created` only as a quoted RFC 3339 datetime
-  - [ ] treat absence of `done` as unfinished
-  - [ ] treat presence of `done` as complete
-  - [ ] parse `done` only as a quoted RFC 3339 datetime
-  - [ ] report invalid `created` and `done` values as semantic diagnostics
-  - [ ] capture the task range, optional id, created value, done value, title
-    range, and body range
-  - [ ] use the first paragraph as the title and later blocks as details
-  - [ ] expose tasks through `djot-core` without adding LSP-specific types
 
 - [ ] Add editor/tooling affordances once the core task model exists:
 
@@ -140,16 +102,7 @@ support.
 
 # Notes
 
-The document may begin with a code block carrying the `metadata` class, e.g.
+Current metadata semantics are documented in [semantics](semantics.dj#Metadata).
+Remaining work:
 
-```` djot
-{.metadata}
-``` toml
-title = "..."
-```
-````
-
-- [x] detect a leading code block whose attributes contain the `metadata`
-  class (`djot_core::metadata_block` / `has_class`)
-- [x] parse its contents as toml (done in `djot-export`'s `build_meta`; hover
-  needs a display form rather than the pandoc `Meta` map)
+- [ ] metadata hover needs a display form rather than the pandoc `Meta` map
