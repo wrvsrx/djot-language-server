@@ -45,15 +45,57 @@ fn code_action_converts_native_task_list_item_to_task_div() {
     let replacement = edit["newText"].as_str().expect("newText is not a string");
     assert!(replacement.starts_with("- {created=\""));
     assert!(replacement.contains("\"}\n  ::: task\n  Write parser.\n  :::"));
-    assert_created_timestamp_shape(replacement);
+    assert_timestamp_shape(replacement, "- {created=\"");
 }
 
-fn assert_created_timestamp_shape(replacement: &str) {
+#[test]
+fn code_action_marks_task_div_done() {
+    let doc = "# Tasks\n\n::: task\nWrite parser.\n:::\n";
+    let msgs = [
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{},"processId":null,"rootUri":null}}),
+        json!({"jsonrpc":"2.0","method":"initialized","params":{}}),
+        json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tasks.dj","languageId":"djot","version":1,"text":doc}}}),
+        json!({"jsonrpc":"2.0","id":2,"method":"textDocument/codeAction",
+        "params":{
+            "textDocument":{"uri":"file:///tasks.dj"},
+            "range":{"start":{"line":3,"character":2},"end":{"line":3,"character":2}},
+            "context":{"diagnostics":[],"only":["quickfix"]}
+        }}),
+        json!({"jsonrpc":"2.0","id":3,"method":"shutdown","params":null}),
+        json!({"jsonrpc":"2.0","method":"exit","params":null}),
+    ];
+
+    let responses = run_session(&msgs);
+    let actions = responses
+        .iter()
+        .find(|m| m["id"] == json!(2))
+        .expect("no codeAction response")["result"]
+        .as_array()
+        .expect("result is not an array");
+    assert_eq!(actions.len(), 1);
+
+    let action = &actions[0];
+    assert_eq!(action["title"], json!("Mark task done"));
+    assert_eq!(action["kind"], json!("quickfix"));
+
+    let edit = &action["edit"]["changes"]["file:///tasks.dj"][0];
+    assert_eq!(
+        edit["range"],
+        json!({"start":{"line":2,"character":0},"end":{"line":2,"character":0}})
+    );
+
+    let inserted = edit["newText"].as_str().expect("newText is not a string");
+    assert!(inserted.starts_with("{done=\""));
+    assert!(inserted.ends_with("\"}\n"));
+    assert_timestamp_shape(inserted, "{done=\"");
+}
+
+fn assert_timestamp_shape(replacement: &str, prefix: &str) {
     let timestamp = replacement
-        .strip_prefix("- {created=\"")
+        .strip_prefix(prefix)
         .and_then(|rest| rest.split_once("\"}"))
         .map(|(timestamp, _)| timestamp)
-        .expect("missing created timestamp");
+        .expect("missing timestamp");
 
     assert_eq!(timestamp.len(), "2026-06-20T12:34:56Z".len());
     assert_eq!(&timestamp[4..5], "-");

@@ -12,8 +12,8 @@ use async_lsp::server::LifecycleLayer;
 use async_lsp::tracing::TracingLayer;
 use async_lsp::{ClientSocket, ErrorCode, LanguageServer, ResponseError};
 use djot_core::{
-    heading_outline, metadata_block, resolve_target, AnalysisDiagnostic, DiagnosticKind, Heading,
-    PathRenameError, RefTarget, RenameTargetError, Workspace,
+    heading_outline, metadata_block, resolve_target, tasks, AnalysisDiagnostic, DiagnosticKind,
+    Heading, PathRenameError, RefTarget, RenameTargetError, Workspace,
 };
 use futures::future::BoxFuture;
 use jotdown::{Container, Event, Parser};
@@ -102,7 +102,10 @@ impl LanguageServer for ServerState {
                     }),
                     code_action_provider: Some(CodeActionProviderCapability::Options(
                         CodeActionOptions {
-                            code_action_kinds: Some(vec![CodeActionKind::REFACTOR_REWRITE]),
+                            code_action_kinds: Some(vec![
+                                CodeActionKind::QUICKFIX,
+                                CodeActionKind::REFACTOR_REWRITE,
+                            ]),
                             resolve_provider: Some(false),
                             work_done_progress_options: WorkDoneProgressOptions::default(),
                         },
@@ -779,33 +782,62 @@ impl ServerState {
     }
 
     fn resolve_code_actions(&self, params: &CodeActionParams) -> Option<CodeActionResponse> {
-        if !requested_code_action_kind_matches(
-            params.context.only.as_deref(),
-            &CodeActionKind::REFACTOR_REWRITE,
-        ) {
-            return Some(Vec::new());
-        }
-
         let path = params.text_document.uri.to_file_path().ok()?;
         let entry = self.workspace.get(&path)?;
         let offset = position_to_offset(&entry.text, params.range.start);
-        let conversion = task_list_item_conversion(&entry.text, offset, &created_timestamp())?;
-        let range = byte_range_to_lsp(&entry.text, &conversion.replace);
-        let edit = WorkspaceEdit::new(HashMap::from([(
-            params.text_document.uri.clone(),
-            vec![TextEdit::new(range, conversion.replacement)],
-        )]));
+        let mut actions = Vec::new();
 
-        Some(vec![CodeActionOrCommand::CodeAction(CodeAction {
-            title: "Convert to task div".to_string(),
-            kind: Some(CodeActionKind::REFACTOR_REWRITE),
-            diagnostics: None,
-            edit: Some(edit),
-            command: None,
-            is_preferred: Some(true),
-            disabled: None,
-            data: None,
-        })])
+        if requested_code_action_kind_matches(
+            params.context.only.as_deref(),
+            &CodeActionKind::REFACTOR_REWRITE,
+        ) {
+            if let Some(conversion) =
+                task_list_item_conversion(&entry.text, offset, &created_timestamp())
+            {
+                let range = byte_range_to_lsp(&entry.text, &conversion.replace);
+                let edit = WorkspaceEdit::new(HashMap::from([(
+                    params.text_document.uri.clone(),
+                    vec![TextEdit::new(range, conversion.replacement)],
+                )]));
+                actions.push(CodeActionOrCommand::CodeAction(CodeAction {
+                    title: "Convert to task div".to_string(),
+                    kind: Some(CodeActionKind::REFACTOR_REWRITE),
+                    diagnostics: None,
+                    edit: Some(edit),
+                    command: None,
+                    is_preferred: Some(true),
+                    disabled: None,
+                    data: None,
+                }));
+            }
+        }
+
+        if requested_code_action_kind_matches(
+            params.context.only.as_deref(),
+            &CodeActionKind::QUICKFIX,
+        ) {
+            if let Some(completion) =
+                task_completion_edit(&entry.text, offset, &created_timestamp())
+            {
+                let range = byte_range_to_lsp(&entry.text, &completion.insert);
+                let edit = WorkspaceEdit::new(HashMap::from([(
+                    params.text_document.uri.clone(),
+                    vec![TextEdit::new(range, completion.new_text)],
+                )]));
+                actions.push(CodeActionOrCommand::CodeAction(CodeAction {
+                    title: "Mark task done".to_string(),
+                    kind: Some(CodeActionKind::QUICKFIX),
+                    diagnostics: None,
+                    edit: Some(edit),
+                    command: None,
+                    is_preferred: Some(true),
+                    disabled: None,
+                    data: None,
+                }));
+            }
+        }
+
+        Some(actions)
     }
 
     fn workspace_link_targets(&self, from: &Path) -> Vec<LinkTargetCompletion> {
@@ -889,6 +921,11 @@ struct AnchorCompletion {
 struct TaskListItemConversion {
     replace: ByteRange<usize>,
     replacement: String,
+}
+
+struct TaskCompletionEdit {
+    insert: ByteRange<usize>,
+    new_text: String,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1094,6 +1131,25 @@ fn task_list_item_conversion(
         replacement: format!(
             "{indent}- {{created=\"{created}\"}}\n{indent}  ::: task\n{indent}  {title}\n{indent}  :::"
         ),
+    })
+}
+
+fn task_completion_edit(text: &str, offset: usize, done: &str) -> Option<TaskCompletionEdit> {
+    let task = tasks(text).into_iter().find(|task| {
+        task.done.is_none() && task.range.start <= offset && offset <= task.range.end
+    })?;
+    let (line_start, line_end) = line_bounds(text, task.range.start)?;
+    let line = text.get(line_start..line_end)?;
+    let indent_len = line
+        .char_indices()
+        .find(|(_, c)| *c != ' ' && *c != '\t')
+        .map(|(i, _)| i)
+        .unwrap_or(line.len());
+    let indent = &line[..indent_len];
+
+    Some(TaskCompletionEdit {
+        insert: line_start..line_start,
+        new_text: format!("{indent}{{done=\"{done}\"}}\n"),
     })
 }
 

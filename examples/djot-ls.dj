@@ -56,6 +56,13 @@ actions. `djot-ls` should offer "Convert to task div".
 After applying the action, the result should look like a list item carrying a
 `created` timestamp and containing a `task` div.
 
+Place the cursor inside this unfinished task div and ask for code actions.
+`djot-ls` should offer "Mark task done".
+
+::: task
+Complete this task from a code action.
+:::
+
 # Diagnostics
 
 These links are intentionally broken so diagnostics have something to report:

@@ -95,7 +95,8 @@ support.
   - [ ] hover summary for completion state, id, created datetime, done datetime,
     and title
   - [ ] document symbols for tasks
-  - [ ] code action to add/remove `done`
+  - [x] code action to add `done`
+  - [ ] code action to remove `done`
   - [x] code action to convert a native Djot task list item into a task div
   - [ ] filter tasks by completion state, created datetime, and done datetime in
     `djot-filter`
