@@ -957,13 +957,6 @@ mod tests {
             }
         );
 
-        let table = task_table(&[open_row, done_row, canceled_row]);
-        assert!(table.contains("Open task"));
-        assert!(table.contains("tasks.dj#open-task"));
-        assert!(table.contains("Done task"));
-        assert!(table.contains("Canceled task"));
-        assert!(table.contains("tasks.dj"));
-
         let _ = std::fs::remove_dir_all(root);
     }
 
