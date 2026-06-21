@@ -336,12 +336,12 @@ fn code_action_marks_indented_recurring_task_done_and_creates_next_instance() {
 
     assert_eq!(
         edits[1]["range"],
-        json!({"start":{"line":8,"character":0},"end":{"line":8,"character":0}})
+        json!({"start":{"line":7,"character":5},"end":{"line":7,"character":5}})
     );
     let next_insert = edits[1]["newText"]
         .as_str()
         .expect("newText is not a string");
-    assert!(next_insert.contains("\n\n  {#Daily-review-2026-06-22}\n"));
+    assert!(next_insert.contains("\n- {#Daily-review-2026-06-22}\n"));
     assert!(next_insert.contains("  {created=\"20"));
     assert!(next_insert.contains("  {project=\"ops\"}\n"));
     assert!(!next_insert.contains("2026-06-20T09:30:00Z"));
@@ -350,6 +350,44 @@ fn code_action_marks_indented_recurring_task_done_and_creates_next_instance() {
     assert!(next_insert
         .contains(" due=\"2026-06-22T17:00:00+08:00\" recur=\"P1D\" prev=\"#daily-review\"}"));
     assert!(next_insert.contains("  ::: task\n  Daily review.\n  :::\n"));
+}
+
+#[test]
+fn code_action_keeps_indented_recurring_task_block_when_list_item_has_extra_content() {
+    let doc = "# Tasks\n\n- {created=\"2026-06-20T09:30:00Z\"}\n  {due=\"2026-06-21T17:00:00+08:00\" recur=\"P1D\"}\n  {#daily-review}\n  ::: task\n  Daily review.\n  :::\n\n  Keep these notes with the original list item.\n";
+    let msgs = [
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{},"processId":null,"rootUri":null}}),
+        json!({"jsonrpc":"2.0","method":"initialized","params":{}}),
+        json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tasks.dj","languageId":"djot","version":1,"text":doc}}}),
+        json!({"jsonrpc":"2.0","id":2,"method":"textDocument/codeAction",
+        "params":{
+            "textDocument":{"uri":"file:///tasks.dj"},
+            "range":{"start":{"line":6,"character":4},"end":{"line":6,"character":4}},
+            "context":{"diagnostics":[],"only":["quickfix"]}
+        }}),
+        json!({"jsonrpc":"2.0","id":3,"method":"shutdown","params":null}),
+        json!({"jsonrpc":"2.0","method":"exit","params":null}),
+    ];
+
+    let responses = run_session(&msgs);
+    let actions = responses
+        .iter()
+        .find(|m| m["id"] == json!(2))
+        .expect("no codeAction response")["result"]
+        .as_array()
+        .expect("result is not an array");
+    let edits = actions[0]["edit"]["changes"]["file:///tasks.dj"]
+        .as_array()
+        .expect("changes is not an array");
+    assert_eq!(
+        edits[1]["range"],
+        json!({"start":{"line":8,"character":0},"end":{"line":8,"character":0}})
+    );
+    let next_insert = edits[1]["newText"]
+        .as_str()
+        .expect("newText is not a string");
+    assert!(next_insert.contains("\n\n  {#Daily-review-2026-06-22}\n"));
+    assert!(!next_insert.contains("\n- {#Daily-review-2026-06-22}\n"));
 }
 
 fn assert_timestamp_shape(replacement: &str, prefix: &str) {

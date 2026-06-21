@@ -1221,6 +1221,7 @@ fn recurring_task_completion_edit(
     let next_due_text = next_due.to_rfc3339_opts(SecondsFormat::Secs, true);
     let current_id_text = escape_attribute_value(&current_id);
     let div = inherited_task_source(text.get(task.range.clone())?, indent);
+    let list_item = single_task_list_item_context(text, line_start, task.range.end, indent);
 
     let mut done_text = String::new();
     if task.id.is_none() {
@@ -1228,20 +1229,173 @@ fn recurring_task_completion_edit(
     }
     done_text.push_str(&format!("{indent}{{done=\"{done}\"}}\n"));
 
+    let next_edit = match list_item {
+        Some(context) => TaskTextEdit {
+            range: context.insert..context.insert,
+            new_text: format!(
+                "\n{list_indent}- {{#{next_id}}}\n{indent}{{created=\"{done}\" due=\"{next_due_text}\" recur=\"{recur}\" prev=\"#{current_id_text}\"}}\n{div}",
+                list_indent = context.list_indent,
+            ),
+        },
+        None => TaskTextEdit {
+            range: next_insert..next_insert,
+            new_text: format!(
+                "\n\n{indent}{{#{next_id}}}\n{indent}{{created=\"{done}\" due=\"{next_due_text}\" recur=\"{recur}\" prev=\"#{current_id_text}\"}}\n{div}"
+            ),
+        },
+    };
+
     Some(TaskCompletionEdit {
         edits: vec![
             TaskTextEdit {
                 range: line_start..line_start,
                 new_text: done_text,
             },
-            TaskTextEdit {
-                range: next_insert..next_insert,
-                new_text: format!(
-                    "\n\n{indent}{{#{next_id}}}\n{indent}{{created=\"{done}\" due=\"{next_due_text}\" recur=\"{recur}\" prev=\"#{current_id_text}\"}}\n{div}"
-                ),
-            },
+            next_edit,
         ],
     })
+}
+
+struct ListTaskContext<'a> {
+    list_indent: &'a str,
+    insert: usize,
+}
+
+fn single_task_list_item_context<'a>(
+    text: &str,
+    task_line_start: usize,
+    task_range_end: usize,
+    task_indent: &'a str,
+) -> Option<ListTaskContext<'a>> {
+    let list_indent = task_indent
+        .strip_suffix("  ")
+        .or_else(|| task_indent.strip_suffix('\t'))?;
+    let list_start = containing_list_item_start(text, task_line_start, list_indent, task_indent)?;
+    let list_end = list_item_end(text, list_start, list_indent)?;
+    let task_end_line_offset = task_range_end.saturating_sub(1);
+    if list_end != line_bounds(text, task_end_line_offset).map(|(_, end)| end)? {
+        return None;
+    }
+    if has_indented_content_after(text, list_end, list_indent) {
+        return None;
+    }
+    if count_task_fences(text.get(list_start..list_end)?) != 1 {
+        return None;
+    }
+
+    Some(ListTaskContext {
+        list_indent,
+        insert: list_end,
+    })
+}
+
+fn containing_list_item_start(
+    text: &str,
+    task_line_start: usize,
+    list_indent: &str,
+    task_indent: &str,
+) -> Option<usize> {
+    let mut line_start = previous_line_start(text, task_line_start)?;
+
+    loop {
+        let (_, line_end) = line_bounds(text, line_start)?;
+        let line = text
+            .get(line_start..line_end)?
+            .strip_suffix('\r')
+            .unwrap_or(text.get(line_start..line_end)?);
+        let indent = leading_indent(line);
+        let trimmed = line.trim_start();
+        if trimmed.is_empty() {
+            return None;
+        }
+        if indent == list_indent && trimmed.starts_with("- ") {
+            return Some(line_start);
+        }
+        if indent != task_indent || !trimmed.starts_with('{') {
+            return None;
+        }
+        line_start = previous_line_start(text, line_start)?;
+    }
+}
+
+fn list_item_end(text: &str, list_start: usize, list_indent: &str) -> Option<usize> {
+    let (_, mut line_end) = line_bounds(text, list_start)?;
+    let mut next_start = next_line_start(text, line_end)?;
+
+    while next_start < text.len() {
+        let (_, next_end) = line_bounds(text, next_start)?;
+        let line = text
+            .get(next_start..next_end)?
+            .strip_suffix('\r')
+            .unwrap_or(text.get(next_start..next_end)?);
+        let indent = leading_indent(line);
+        let trimmed = line.trim_start();
+        if trimmed.is_empty() {
+            break;
+        }
+        if indent == list_indent && trimmed.starts_with("- ") {
+            break;
+        }
+        if indent.len() <= list_indent.len() {
+            break;
+        }
+        line_end = next_end;
+        let Some(start) = next_line_start(text, next_end) else {
+            break;
+        };
+        next_start = start;
+    }
+
+    Some(line_end)
+}
+
+fn has_indented_content_after(text: &str, line_end: usize, list_indent: &str) -> bool {
+    let Some(mut line_start) = next_line_start(text, line_end) else {
+        return false;
+    };
+
+    while line_start < text.len() {
+        let Some((_, next_end)) = line_bounds(text, line_start) else {
+            return false;
+        };
+        let Some(line) = text.get(line_start..next_end) else {
+            return false;
+        };
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        let trimmed = line.trim_start();
+        if !trimmed.is_empty() {
+            let indent = leading_indent(line);
+            return indent.len() > list_indent.len();
+        }
+        let Some(start) = next_line_start(text, next_end) else {
+            return false;
+        };
+        line_start = start;
+    }
+
+    false
+}
+
+fn count_task_fences(text: &str) -> usize {
+    text.lines()
+        .filter(|line| line.trim_start().starts_with("::: task"))
+        .count()
+}
+
+fn previous_line_start(text: &str, line_start: usize) -> Option<usize> {
+    if line_start == 0 {
+        return None;
+    }
+    let previous_end = line_start.checked_sub('\n'.len_utf8())?;
+    Some(text[..previous_end].rfind('\n').map_or(0, |i| i + 1))
+}
+
+fn next_line_start(text: &str, line_end: usize) -> Option<usize> {
+    if line_end >= text.len() {
+        None
+    } else {
+        Some(line_end + '\n'.len_utf8())
+    }
 }
 
 fn ensure_block_indent(block: &str, indent: &str) -> String {

@@ -107,7 +107,7 @@ support.
   - [x] code action to add `done`
   - [x] `done` code action completes recurring task instances by appending the
     next instance
-  - [ ] for list-shaped recurring tasks, append the next instance as a new list
+  - [x] for list-shaped recurring tasks, append the next instance as a new list
     item instead of an indented task block in the same list item
   - [ ] code action to remove `done`
   - [x] code action to convert a native Djot task list item into a task div
