@@ -1204,9 +1204,6 @@ fn recurring_task_completion_edit(
     let line_start = task_opening_fence_line_start(text, &task.range)?;
     let line = text.get(line_start..line_bounds(text, line_start)?.1)?;
     let indent = leading_indent(line);
-    if !indent.is_empty() {
-        return None;
-    }
 
     let anchors = build_index(text).anchors;
     let mut reserved = HashSet::new();
@@ -1227,9 +1224,9 @@ fn recurring_task_completion_edit(
 
     let mut done_text = String::new();
     if task.id.is_none() {
-        done_text.push_str(&format!("{{#{current_id_text}}}\n"));
+        done_text.push_str(&format!("{indent}{{#{current_id_text}}}\n"));
     }
-    done_text.push_str(&format!("{{done=\"{done}\"}}\n"));
+    done_text.push_str(&format!("{indent}{{done=\"{done}\"}}\n"));
 
     Some(TaskCompletionEdit {
         edits: vec![
@@ -1240,7 +1237,7 @@ fn recurring_task_completion_edit(
             TaskTextEdit {
                 range: next_insert..next_insert,
                 new_text: format!(
-                    "\n\n{{#{next_id}}}\n{{created=\"{done}\" due=\"{next_due_text}\" recur=\"{recur}\" prev=\"#{current_id_text}\"}}\n{div}"
+                    "\n\n{indent}{{#{next_id}}}\n{indent}{{created=\"{done}\" due=\"{next_due_text}\" recur=\"{recur}\" prev=\"#{current_id_text}\"}}\n{div}"
                 ),
             },
         ],
