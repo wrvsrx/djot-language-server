@@ -140,6 +140,7 @@ struct TaskRecord<'a> {
     title: &'a str,
     created: Option<&'a str>,
     done: Option<&'a str>,
+    canceled: Option<&'a str>,
     due: Option<&'a str>,
     recur: Option<&'a str>,
     prev: Option<&'a str>,
@@ -203,6 +204,7 @@ impl QueryPlan {
         context.add_variable_from_value("title", record.title.to_string());
         context.add_variable_from_value("created", record.created.map(str::to_string));
         context.add_variable_from_value("done", record.done.map(str::to_string));
+        context.add_variable_from_value("canceled", record.canceled.map(str::to_string));
         context.add_variable_from_value("due", record.due.map(str::to_string));
         context.add_variable_from_value("recur", record.recur.map(str::to_string));
         context.add_variable_from_value("prev", record.prev.map(str::to_string));
@@ -667,6 +669,7 @@ fn task_matches(
         title: &task.title,
         created: task.created.as_deref(),
         done: task.done.as_deref(),
+        canceled: task.canceled.as_deref(),
         due: task.due.as_deref(),
         recur: task.recur.as_deref(),
         prev: task.prev.as_deref(),
@@ -674,7 +677,13 @@ fn task_matches(
 }
 
 fn task_output_record(root: &Path, path: &Path, task: &Task) -> TaskOutputRecord {
-    let status = if task.done.is_some() { "o" } else { "-" };
+    let status = if task.canceled.is_some() {
+        "x"
+    } else if task.done.is_some() {
+        "o"
+    } else {
+        "-"
+    };
     let source = match task.id.as_deref() {
         Some(id) => format!("{}#{id}", display_path(root, path)),
         None => display_path(root, path),
@@ -861,7 +870,7 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(
             root.join("tasks.dj"),
-            "{#open-task}\n{created=\"2026-06-18T09:00:00+08:00\" due=\"2026-06-20T09:00:00+08:00\" recur=\"P1W\" prev=\"#previous-task\"}\n::: task\nOpen task\n:::\n\n{created=\"2026-06-19T09:00:00+08:00\" done=\"2026-06-19T21:30:00+08:00\"}\n::: task\nDone task\n:::\n",
+            "{#open-task}\n{created=\"2026-06-18T09:00:00+08:00\" due=\"2026-06-20T09:00:00+08:00\" recur=\"P1W\" prev=\"#previous-task\"}\n::: task\nOpen task\n:::\n\n{created=\"2026-06-19T09:00:00+08:00\" done=\"2026-06-19T21:30:00+08:00\"}\n::: task\nDone task\n:::\n\n{created=\"2026-06-20T09:00:00+08:00\" canceled=\"2026-06-20T21:30:00+08:00\"}\n::: task\nCanceled task\n:::\n",
         )
         .unwrap();
 
@@ -872,6 +881,7 @@ mod tests {
         let open = QueryPlan::compile("done == null").unwrap();
         let created = QueryPlan::compile("created == '2026-06-18T09:00:00+08:00'").unwrap();
         let done = QueryPlan::compile("done != null && title.matches('Done')").unwrap();
+        let canceled = QueryPlan::compile("canceled != null && title.matches('Canceled')").unwrap();
         let recurring = QueryPlan::compile(
             "due == '2026-06-20T09:00:00+08:00' && recur == 'P1W' && prev == '#previous-task'",
         )
@@ -883,12 +893,14 @@ mod tests {
         assert!(task_matches(&root, &path, &found[0], Some(&created)).unwrap());
         assert!(!task_matches(&root, &path, &found[1], Some(&created)).unwrap());
         assert!(task_matches(&root, &path, &found[1], Some(&done)).unwrap());
+        assert!(task_matches(&root, &path, &found[2], Some(&canceled)).unwrap());
         assert!(task_matches(&root, &path, &found[0], Some(&recurring)).unwrap());
         assert!(!task_matches(&root, &path, &found[1], Some(&recurring)).unwrap());
         assert!(task_matches(&root, &path, &found[0], Some(&source)).unwrap());
         assert!(!task_matches(&root, &path, &found[1], Some(&source)).unwrap());
         let open_row = task_output_record(&root, &path, &found[0]);
         let done_row = task_output_record(&root, &path, &found[1]);
+        let canceled_row = task_output_record(&root, &path, &found[2]);
         assert_eq!(
             open_row,
             TaskOutputRecord {
@@ -905,11 +917,20 @@ mod tests {
                 source: "tasks.dj".to_string(),
             }
         );
+        assert_eq!(
+            canceled_row,
+            TaskOutputRecord {
+                status: "x".to_string(),
+                title: "Canceled task".to_string(),
+                source: "tasks.dj".to_string(),
+            }
+        );
 
-        let table = task_table(&[open_row, done_row]);
+        let table = task_table(&[open_row, done_row, canceled_row]);
         assert!(table.contains("Open task"));
         assert!(table.contains("tasks.dj#open-task"));
         assert!(table.contains("Done task"));
+        assert!(table.contains("Canceled task"));
         assert!(table.contains("tasks.dj"));
 
         let _ = std::fs::remove_dir_all(root);
