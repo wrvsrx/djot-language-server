@@ -12,11 +12,11 @@ use async_lsp::tracing::TracingLayer;
 use async_lsp::{ClientSocket, ErrorCode, LanguageServer, ResponseError};
 use chrono::{DateTime, Datelike, Duration, FixedOffset, Local, SecondsFormat, TimeZone, Timelike};
 use djot_core::{
-    build_index, heading_outline, metadata_block, resolve_target, tasks, AnalysisDiagnostic,
-    DiagnosticKind, Heading, PathRenameError, RefTarget, RenameTargetError, Workspace,
+    build_index, heading_outline, metadata_block, parse_repeat_rule, resolve_target, tasks,
+    AnalysisDiagnostic, DiagnosticKind, Heading, PathRenameError, RefTarget, RenameTargetError,
+    RepeatRule, Workspace,
 };
 use futures::future::BoxFuture;
-use iso8601_duration::Duration as IsoDuration;
 use jotdown::{Container, Event, Parser};
 use lsp_types::{
     CodeAction, CodeActionKind, CodeActionOptions, CodeActionOrCommand, CodeActionParams,
@@ -1247,71 +1247,13 @@ fn recurring_task_completion_edit(
     })
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RepeatRule {
-    Days(i64),
-    Weeks(i64),
-    Months(i32),
-    Years(i32),
-}
-
 fn next_repeat_due(due: DateTime<FixedOffset>, repeat: &str) -> Option<DateTime<FixedOffset>> {
-    let rule = parse_repeat_rule(repeat.parse().ok()?)?;
+    let rule = parse_repeat_rule(repeat)?;
     match rule {
         RepeatRule::Days(days) => Some(due + Duration::days(days)),
         RepeatRule::Weeks(weeks) => Some(due + Duration::weeks(weeks)),
         RepeatRule::Months(months) => add_months(due, months),
         RepeatRule::Years(years) => add_months(due, years.checked_mul(12)?),
-    }
-}
-
-fn parse_repeat_rule(duration: IsoDuration) -> Option<RepeatRule> {
-    let units = [
-        duration.year,
-        duration.month,
-        duration.day,
-        duration.hour,
-        duration.minute,
-        duration.second,
-    ];
-    if units.iter().filter(|value| **value > 0.0).count() != 1 {
-        return None;
-    }
-    if duration.hour > 0.0 || duration.minute > 0.0 || duration.second > 0.0 {
-        return None;
-    }
-    if duration.year > 0.0 {
-        return integer_f32(duration.year).and_then(|years| {
-            i32::try_from(years)
-                .ok()
-                .filter(|years| *years > 0)
-                .map(RepeatRule::Years)
-        });
-    }
-    if duration.month > 0.0 {
-        return integer_f32(duration.month).and_then(|months| {
-            i32::try_from(months)
-                .ok()
-                .filter(|months| *months > 0)
-                .map(RepeatRule::Months)
-        });
-    }
-    integer_f32(duration.day).and_then(|days| {
-        if days > 0 && days % 7 == 0 {
-            Some(RepeatRule::Weeks(days / 7))
-        } else if days > 0 {
-            Some(RepeatRule::Days(days))
-        } else {
-            None
-        }
-    })
-}
-
-fn integer_f32(value: f32) -> Option<i64> {
-    if value.fract() == 0.0 && value <= i64::MAX as f32 {
-        Some(value as i64)
-    } else {
-        None
     }
 }
 
@@ -1622,6 +1564,17 @@ fn to_lsp_diagnostic(text: &str, diagnostic: AnalysisDiagnostic) -> Diagnostic {
         DiagnosticKind::UnresolvedPath { path } => (
             "unresolved-path",
             format!("Unresolved Djot path `{}`", path),
+        ),
+        DiagnosticKind::MissingTaskDueForRepeat => (
+            "missing-task-due-for-repeat",
+            "Recurring tasks with `repeat` need a valid RFC 3339 `due` datetime.".to_string(),
+        ),
+        DiagnosticKind::InvalidTaskRepeat { repeat } => (
+            "invalid-task-repeat",
+            format!(
+                "Unsupported task `repeat` value `{}`. Use an ISO 8601 duration like `P1D`, `P1W`, `P1M`, or `P1Y`.",
+                repeat
+            ),
         ),
     };
 

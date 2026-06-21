@@ -519,7 +519,6 @@ dependencies = [
  "chrono",
  "djot-core",
  "futures",
- "iso8601-duration",
  "jotdown",
  "lsp-types",
  "serde_json",
