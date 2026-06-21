@@ -1220,12 +1220,14 @@ fn recurring_task_completion_edit(
     let recur = escape_attribute_value(recur);
     let next_due_text = next_due.to_rfc3339_opts(SecondsFormat::Secs, true);
     let current_id_text = escape_attribute_value(&current_id);
+    let current_id_attribute = anchor_attribute(&current_id);
+    let next_id_attribute = anchor_attribute(&next_id);
     let div = inherited_task_source(text.get(task.range.clone())?, indent);
     let list_item = single_task_list_item_context(text, line_start, task.range.end, indent);
 
     let mut done_text = String::new();
     if task.id.is_none() {
-        done_text.push_str(&format!("{indent}{{#{current_id_text}}}\n"));
+        done_text.push_str(&format!("{indent}{current_id_attribute}\n"));
     }
     done_text.push_str(&format!("{indent}{{done=\"{done}\"}}\n"));
 
@@ -1233,14 +1235,14 @@ fn recurring_task_completion_edit(
         Some(context) => TaskTextEdit {
             range: context.insert..context.insert,
             new_text: format!(
-                "\n{list_indent}- {{#{next_id}}}\n{indent}{{created=\"{done}\" due=\"{next_due_text}\" recur=\"{recur}\" prev=\"#{current_id_text}\"}}\n{div}",
+                "\n{list_indent}- {next_id_attribute}\n{indent}{{created=\"{done}\" due=\"{next_due_text}\" recur=\"{recur}\" prev=\"#{current_id_text}\"}}\n{div}",
                 list_indent = context.list_indent,
             ),
         },
         None => TaskTextEdit {
             range: next_insert..next_insert,
             new_text: format!(
-                "\n\n{indent}{{#{next_id}}}\n{indent}{{created=\"{done}\" due=\"{next_due_text}\" recur=\"{recur}\" prev=\"#{current_id_text}\"}}\n{div}"
+                "\n\n{indent}{next_id_attribute}\n{indent}{{created=\"{done}\" due=\"{next_due_text}\" recur=\"{recur}\" prev=\"#{current_id_text}\"}}\n{div}"
             ),
         },
     };
@@ -1616,6 +1618,21 @@ fn leading_indent(line: &str) -> &str {
 
 fn escape_attribute_value(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn anchor_attribute(id: &str) -> String {
+    if is_shorthand_anchor_id(id) {
+        format!("{{#{id}}}")
+    } else {
+        format!("{{id=\"{}\"}}", escape_attribute_value(id))
+    }
+}
+
+fn is_shorthand_anchor_id(id: &str) -> bool {
+    !id.is_empty()
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b':' | b'_' | b'-'))
 }
 
 fn metadata_insertion(text: &str, offset: usize, path: &Path) -> Option<MetadataInsertion> {
@@ -2260,6 +2277,22 @@ mod tests {
         assert!(next_recur_due(due, "P1M1D").is_none());
         assert!(next_recur_due(due, "PT1H").is_none());
         assert!(next_recur_due(due, "weekly").is_none());
+    }
+
+    #[test]
+    fn anchor_attribute_uses_shorthand_only_for_ascii_name_ids() {
+        assert_eq!(
+            anchor_attribute("daily-review-2026-06-22"),
+            "{#daily-review-2026-06-22}"
+        );
+        assert_eq!(
+            anchor_attribute("学习-anki-2026-06-22"),
+            "{id=\"学习-anki-2026-06-22\"}"
+        );
+        assert_eq!(
+            anchor_attribute("quote\"backslash\\"),
+            "{id=\"quote\\\"backslash\\\\\"}"
+        );
     }
 
     #[test]

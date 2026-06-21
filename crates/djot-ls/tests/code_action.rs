@@ -295,6 +295,53 @@ fn code_action_marks_recurring_task_done_and_creates_next_instance() {
 }
 
 #[test]
+fn code_action_uses_quoted_id_attribute_for_unicode_recurring_task_ids() {
+    let doc =
+        "# Tasks\n\n{due=\"2026-06-21T17:00:00+08:00\" recur=\"P1D\"}\n::: task\n学习 Anki\n:::\n";
+    let msgs = [
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{},"processId":null,"rootUri":null}}),
+        json!({"jsonrpc":"2.0","method":"initialized","params":{}}),
+        json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tasks.dj","languageId":"djot","version":1,"text":doc}}}),
+        json!({"jsonrpc":"2.0","id":2,"method":"textDocument/codeAction",
+        "params":{
+            "textDocument":{"uri":"file:///tasks.dj"},
+            "range":{"start":{"line":4,"character":1},"end":{"line":4,"character":1}},
+            "context":{"diagnostics":[],"only":["quickfix"]}
+        }}),
+        json!({"jsonrpc":"2.0","id":3,"method":"shutdown","params":null}),
+        json!({"jsonrpc":"2.0","method":"exit","params":null}),
+    ];
+
+    let responses = run_session(&msgs);
+    let actions = responses
+        .iter()
+        .find(|m| m["id"] == json!(2))
+        .expect("no codeAction response")["result"]
+        .as_array()
+        .expect("result is not an array");
+    assert_eq!(actions.len(), 1);
+
+    let edits = actions[0]["edit"]["changes"]["file:///tasks.dj"]
+        .as_array()
+        .expect("changes is not an array");
+    assert_eq!(edits.len(), 2);
+
+    let done_insert = edits[0]["newText"]
+        .as_str()
+        .expect("newText is not a string");
+    assert!(done_insert.starts_with("{id=\"学习-Anki-2026-06-21\"}\n{done=\""));
+
+    let next_insert = edits[1]["newText"]
+        .as_str()
+        .expect("newText is not a string");
+    assert!(next_insert.contains("{id=\"学习-Anki-2026-06-22\"}\n"));
+    assert!(next_insert.contains(
+        " due=\"2026-06-22T17:00:00+08:00\" recur=\"P1D\" prev=\"#学习-Anki-2026-06-21\"}"
+    ));
+    assert!(next_insert.contains("::: task\n学习 Anki\n:::\n"));
+}
+
+#[test]
 fn code_action_marks_indented_recurring_task_done_and_creates_next_instance() {
     let doc = "# Tasks\n\n- {created=\"2026-06-20T09:30:00Z\"}\n  {project=\"ops\" due=\"2026-06-21T17:00:00+08:00\" recur=\"P1D\"}\n  {#daily-review}\n  ::: task\n  Daily review.\n  :::\n";
     let msgs = [
