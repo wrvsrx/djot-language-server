@@ -260,6 +260,13 @@ pub fn build_index(text: &str) -> DocIndex {
                         explicit: true,
                     });
                 }
+                if let Container::Div { class } = &container {
+                    if class == TASK_CLASS {
+                        if let Some(reference) = task_prev_reference(text, &span, &attrs) {
+                            references.push(reference);
+                        }
+                    }
+                }
                 if let Container::Link(dst, _) = container {
                     open_links.push((dst.into_owned(), span.start));
                 }
@@ -1007,6 +1014,104 @@ fn reference_target_path_range(
     Some(source.start + start..source.start + start + path.len())
 }
 
+fn task_prev_reference(text: &str, span: &Range<usize>, attrs: &Attributes) -> Option<Reference> {
+    let prev = attrs.get_value("prev")?.to_string();
+    let target = parse_dst(&prev);
+    match &target {
+        RefTarget::Internal { .. } => {}
+        RefTarget::External { path, id: Some(_) } if is_djot_path(path) => {}
+        RefTarget::External { .. } | RefTarget::Url(_) => return None,
+    }
+
+    let source = attribute_value_range(text, span, "prev", &prev)?;
+    let target_path_range = reference_target_path_range(text, &source, &target);
+    let target_id_range = reference_target_id_range(text, &source, &target);
+    Some(Reference {
+        source,
+        target_path_range,
+        target_id_range,
+        target,
+    })
+}
+
+fn attribute_value_range(
+    text: &str,
+    range: &Range<usize>,
+    key: &str,
+    value: &str,
+) -> Option<Range<usize>> {
+    let source = text.get(range.clone())?;
+    let mut search_start = 0;
+
+    while search_start < source.len() {
+        let key_start = source.get(search_start..)?.find(key)? + search_start;
+        let before = source.get(..key_start)?.chars().next_back();
+        if before.is_some_and(|c| !(c == '{' || c.is_whitespace())) {
+            search_start = key_start + key.len();
+            continue;
+        }
+
+        let mut cursor = key_start + key.len();
+        cursor = skip_ascii_whitespace(source, cursor);
+        if source.as_bytes().get(cursor) != Some(&b'=') {
+            search_start = key_start + key.len();
+            continue;
+        }
+        cursor += 1;
+        cursor = skip_ascii_whitespace(source, cursor);
+
+        let (value_start, value_end) = match source.as_bytes().get(cursor).copied() {
+            Some(quote @ (b'"' | b'\'')) => {
+                let value_start = cursor + 1;
+                let mut pos = value_start;
+                let mut escaped = false;
+                loop {
+                    let byte = *source.as_bytes().get(pos)?;
+                    if escaped {
+                        escaped = false;
+                    } else if byte == b'\\' {
+                        escaped = true;
+                    } else if byte == quote {
+                        break (value_start, pos);
+                    }
+                    pos += 1;
+                }
+            }
+            Some(_) => {
+                let value_start = cursor;
+                let mut value_end = cursor;
+                while let Some(byte) = source.as_bytes().get(value_end) {
+                    if byte.is_ascii_whitespace() || *byte == b'}' {
+                        break;
+                    }
+                    value_end += 1;
+                }
+                (value_start, value_end)
+            }
+            None => return None,
+        };
+
+        if source.get(value_start..value_end)? == value {
+            return Some(range.start + value_start..range.start + value_end);
+        }
+
+        search_start = key_start + key.len();
+    }
+
+    None
+}
+
+fn skip_ascii_whitespace(source: &str, mut cursor: usize) -> usize {
+    while source
+        .as_bytes()
+        .get(cursor)
+        .is_some_and(u8::is_ascii_whitespace)
+    {
+        cursor += 1;
+    }
+    cursor
+}
+
 fn datetime_attribute(attrs: &Attributes, key: &str) -> Option<String> {
     attrs
         .get_value(key)
@@ -1334,6 +1439,54 @@ mod tests {
     }
 
     #[test]
+    fn index_tracks_task_prev_references() {
+        let text = "{prev=\"#old-task\"}\n::: task\nNext task.\n:::\n\n{prev=\"other.dj#previous\"}\n::: task\nCross-file next task.\n:::\n\n{prev=\"other.dj\"}\n::: task\nFile-only prev is not a reference.\n:::\n";
+        let index = build_index(text);
+
+        let refs = index
+            .references
+            .iter()
+            .map(|reference| {
+                (
+                    text[reference.source.clone()].to_string(),
+                    reference
+                        .target_path_range
+                        .clone()
+                        .map(|range| text[range].to_string()),
+                    reference
+                        .target_id_range
+                        .clone()
+                        .map(|range| text[range].to_string()),
+                    reference.target.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            refs,
+            vec![
+                (
+                    "#old-task".to_string(),
+                    None,
+                    Some("old-task".to_string()),
+                    RefTarget::Internal {
+                        id: "old-task".to_string()
+                    },
+                ),
+                (
+                    "other.dj#previous".to_string(),
+                    Some("other.dj".to_string()),
+                    Some("previous".to_string()),
+                    RefTarget::External {
+                        path: "other.dj".to_string(),
+                        id: Some("previous".to_string()),
+                    },
+                ),
+            ]
+        );
+    }
+
+    #[test]
     fn metadata_block_extracts_leading_toml() {
         let text = "{.metadata}\n``` toml\ntitle = \"x\"\n```\n\n# H\n";
         assert_eq!(metadata_block(text).as_deref(), Some("title = \"x\"\n"));
@@ -1478,7 +1631,8 @@ mod tests {
     fn workspace_collects_rename_edits() {
         let a = PathBuf::from("/notes/a.dj");
         let b = PathBuf::from("/notes/b.dj");
-        let doc_a = "# A\n\n[local](#A) [other](b.dj#topic) [file](b.dj)\n";
+        let doc_a =
+            "# A\n\n[local](#A) [other](b.dj#topic) [file](b.dj)\n\n{prev=\"b.dj#topic\"}\n::: task\nNext.\n:::\n";
         let doc_b = "{#topic}\nTopic\n\n[back](../notes/a.dj#A)\n";
         let mut ws = Workspace::new();
         ws.insert(a.clone(), doc_a.to_string());
@@ -1496,7 +1650,11 @@ mod tests {
 
         assert_eq!(
             edits,
-            vec![(a, "topic".to_string()), (b, "topic".to_string())]
+            vec![
+                (a.clone(), "topic".to_string()),
+                (a, "topic".to_string()),
+                (b, "topic".to_string())
+            ]
         );
     }
 

@@ -98,6 +98,11 @@ normalized lexically, including `.` and `..`.
 Inline links, reference links, and implicit links are treated uniformly after
 jotdown resolves them to a destination string.
 
+Task `prev` values that name an anchor, such as `prev="#old-task"` or
+`prev="archive.dj#old-task"`, are also semantic references. This rule applies
+only to the `prev` field on task metadata; ordinary attributes named `prev` are
+not references.
+
 # Target resolution
 
 For Djot semantic references:
@@ -168,8 +173,9 @@ Current task fields are intentionally minimal:
 - `recur`: an ISO 8601 duration string describing how tooling should create
   the next task instance after completing this one. Current tooling accepts one
   positive integer date unit: `PnD`, `PnW`, `PnM`, or `PnY`.
-- `prev`: a Djot target such as `#weekly-review-2026-06-21` pointing to the
-  previous task instance in a repeated chain.
+- `prev`: an anchored Djot target such as `#weekly-review-2026-06-21` or
+  `archive.dj#weekly-review-2026-06-21` pointing to the previous task instance
+  in a repeated chain.
 
 A task with `due` and `recur` is a recurring task instance. When completed
 through tooling, the completed instance keeps its `done` timestamp and a new
