@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use cel::{Context, ExecutionError, Program, Value};
 use clap::{Args, Parser, Subcommand};
+use comfy_table::{presets::NOTHING, ContentArrangement, Table};
 use djot_core::{metadata_block, resolve_target, tasks, Task, Workspace};
 use skim::prelude::*;
 
@@ -133,13 +134,22 @@ struct DocumentRecord<'a> {
 }
 
 struct TaskRecord<'a> {
+    root: &'a Path,
     path: &'a Path,
+    id: Option<&'a str>,
     title: &'a str,
     created: Option<&'a str>,
     done: Option<&'a str>,
     due: Option<&'a str>,
     recur: Option<&'a str>,
     prev: Option<&'a str>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct TaskOutputRecord {
+    status: String,
+    title: String,
+    source: String,
 }
 
 impl QueryPlan {
@@ -188,6 +198,8 @@ impl QueryPlan {
 
     fn matches_task(&self, record: TaskRecord<'_>) -> Result<bool, String> {
         let mut context = Context::default();
+        context.add_variable_from_value("path", display_path(record.root, record.path));
+        context.add_variable_from_value("id", record.id.map(str::to_string));
         context.add_variable_from_value("title", record.title.to_string());
         context.add_variable_from_value("created", record.created.map(str::to_string));
         context.add_variable_from_value("done", record.done.map(str::to_string));
@@ -622,21 +634,25 @@ fn editor_paths(root: &Path, selected: &[String]) -> Vec<PathBuf> {
 }
 
 fn print_tasks(root: &Path, docs: &LoadedDocs, plan: Option<&QueryPlan>) -> Result<(), String> {
+    let mut records = Vec::new();
     for path in &docs.paths {
         let Some(text) = docs.texts.get(path) else {
             continue;
         };
         for task in tasks(text) {
             if task_matches(root, path, &task, plan)? {
-                print_task(&task);
+                records.push(task_output_record(root, path, &task));
             }
         }
+    }
+    if !records.is_empty() {
+        println!("{}", task_table(&records));
     }
     Ok(())
 }
 
 fn task_matches(
-    _root: &Path,
+    root: &Path,
     path: &Path,
     task: &Task,
     plan: Option<&QueryPlan>,
@@ -645,7 +661,9 @@ fn task_matches(
         return Ok(true);
     };
     plan.matches_task(TaskRecord {
+        root,
         path,
+        id: task.id.as_deref(),
         title: &task.title,
         created: task.created.as_deref(),
         done: task.done.as_deref(),
@@ -655,13 +673,28 @@ fn task_matches(
     })
 }
 
-fn print_task(task: &Task) {
-    println!("{}", task_line(task));
+fn task_output_record(root: &Path, path: &Path, task: &Task) -> TaskOutputRecord {
+    let status = if task.done.is_some() { "o" } else { "-" };
+    let source = match task.id.as_deref() {
+        Some(id) => format!("{}#{id}", display_path(root, path)),
+        None => display_path(root, path),
+    };
+    TaskOutputRecord {
+        status: status.to_string(),
+        title: task.title.clone(),
+        source,
+    }
 }
 
-fn task_line(task: &Task) -> String {
-    let marker = if task.done.is_some() { "o" } else { "-" };
-    format!("{marker} {}", task.title)
+fn task_table(records: &[TaskOutputRecord]) -> String {
+    let mut table = Table::new();
+    table
+        .load_preset(NOTHING)
+        .set_content_arrangement(ContentArrangement::Dynamic);
+    for record in records {
+        table.add_row([&record.status, &record.title, &record.source]);
+    }
+    table.to_string()
 }
 
 fn print_paths(paths: impl IntoIterator<Item = String>) {
@@ -828,7 +861,7 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(
             root.join("tasks.dj"),
-            "{created=\"2026-06-18T09:00:00+08:00\" due=\"2026-06-20T09:00:00+08:00\" recur=\"P1W\" prev=\"#previous-task\"}\n::: task\nOpen task\n:::\n\n{created=\"2026-06-19T09:00:00+08:00\" done=\"2026-06-19T21:30:00+08:00\"}\n::: task\nDone task\n:::\n",
+            "{#open-task}\n{created=\"2026-06-18T09:00:00+08:00\" due=\"2026-06-20T09:00:00+08:00\" recur=\"P1W\" prev=\"#previous-task\"}\n::: task\nOpen task\n:::\n\n{created=\"2026-06-19T09:00:00+08:00\" done=\"2026-06-19T21:30:00+08:00\"}\n::: task\nDone task\n:::\n",
         )
         .unwrap();
 
@@ -843,6 +876,7 @@ mod tests {
             "due == '2026-06-20T09:00:00+08:00' && recur == 'P1W' && prev == '#previous-task'",
         )
         .unwrap();
+        let source = QueryPlan::compile("path == 'tasks.dj' && id == 'open-task'").unwrap();
 
         assert!(task_matches(&root, &path, &found[0], Some(&open)).unwrap());
         assert!(!task_matches(&root, &path, &found[1], Some(&open)).unwrap());
@@ -851,8 +885,32 @@ mod tests {
         assert!(task_matches(&root, &path, &found[1], Some(&done)).unwrap());
         assert!(task_matches(&root, &path, &found[0], Some(&recurring)).unwrap());
         assert!(!task_matches(&root, &path, &found[1], Some(&recurring)).unwrap());
-        assert_eq!(task_line(&found[0]), "- Open task");
-        assert_eq!(task_line(&found[1]), "o Done task");
+        assert!(task_matches(&root, &path, &found[0], Some(&source)).unwrap());
+        assert!(!task_matches(&root, &path, &found[1], Some(&source)).unwrap());
+        let open_row = task_output_record(&root, &path, &found[0]);
+        let done_row = task_output_record(&root, &path, &found[1]);
+        assert_eq!(
+            open_row,
+            TaskOutputRecord {
+                status: "-".to_string(),
+                title: "Open task".to_string(),
+                source: "tasks.dj#open-task".to_string(),
+            }
+        );
+        assert_eq!(
+            done_row,
+            TaskOutputRecord {
+                status: "o".to_string(),
+                title: "Done task".to_string(),
+                source: "tasks.dj".to_string(),
+            }
+        );
+
+        let table = task_table(&[open_row, done_row]);
+        assert!(table.contains("Open task"));
+        assert!(table.contains("tasks.dj#open-task"));
+        assert!(table.contains("Done task"));
+        assert!(table.contains("tasks.dj"));
 
         let _ = std::fs::remove_dir_all(root);
     }
