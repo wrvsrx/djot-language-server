@@ -164,9 +164,9 @@ Abandon the task parser rewrite.
 :::
 ````
 
-The `created`, `due`, `done`, and `canceled` values must be quoted RFC 3339
-datetimes. Date-only values such as `done=2026-06-19`, quoted date-only values
-such as `done="2026-06-19"`, and non-RFC-3339 datetime strings are not
+The `created`, `due`, `wait`, `done`, and `canceled` values must be quoted RFC
+3339 datetimes. Date-only values such as `done=2026-06-19`, quoted date-only
+values such as `done="2026-06-19"`, and non-RFC-3339 datetime strings are not
 recognized as task metadata.
 
 The task id is optional. When present, it is just the normal Djot explicit id
@@ -178,6 +178,8 @@ Current task fields are intentionally minimal:
 - `created`: an RFC 3339 datetime string recording when the task was created.
 - `due`: an RFC 3339 datetime string recording when the current task instance
   is due.
+- `wait`: an RFC 3339 datetime string recording the earliest time the task is
+  intended to become actionable. It is not a closed state.
 - `done`: an RFC 3339 datetime string recording when the task was completed.
 - `canceled`: an RFC 3339 datetime string recording when the task was
   abandoned or canceled.
@@ -191,11 +193,13 @@ Current task fields are intentionally minimal:
 A task with `due` and `recur` is a recurring task instance. When completed
 through tooling, the completed instance keeps its `done` timestamp and a new
 task instance is appended with the next `due`, the same `recur`, and `prev`
-pointing back to the completed task. Automatically generated recurring task ids
-use the Djot heading identifier derived from the task title plus the due date,
-such as `weekly-review-2026-06-21`. If the generated id contains characters
-that Djot does not allow in `{#id}` shorthand, tooling writes it as a quoted
-`id` attribute instead, for example `{id="学习-Anki-2026-06-21"}`.
+pointing back to the completed task. If the completed task has `wait`, the new
+instance gets the next `wait` advanced by the same repeat rule as `due`.
+Automatically generated recurring task ids use the Djot heading identifier
+derived from the task title plus the due date, such as
+`weekly-review-2026-06-21`. If the generated id contains characters that Djot
+does not allow in `{#id}` shorthand, tooling writes it as a quoted `id`
+attribute instead, for example `{id="学习-Anki-2026-06-21"}`.
 
 No other task metadata fields are currently defined. In particular, `status`,
 `scheduled`, `priority`, and `tags` are outside the current semantics. Native

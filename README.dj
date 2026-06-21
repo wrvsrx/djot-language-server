@@ -88,7 +88,13 @@ no `.dj` / `.djot` extension, and opens it with `EDITOR`.
 The `tasks` subcommand prints task blocks and applies the same `--query`
 mechanism to task records. Task output uses `-` for open tasks, `o` for done
 tasks, and `x` for canceled tasks. Task queries expose `path`, `id`, `title`,
-`created`, `due`, `done`, `canceled`, `recur`, and `prev`.
+`created`, `due`, `wait`, `done`, `canceled`, `recur`, `prev`, and `now`.
+Datetime-valued task fields and `now` are CEL timestamps, so time comparisons
+work across timezone offsets:
+
+``` sh
+djot-filter tasks --query 'done == null && canceled == null && (wait == null || wait <= now)'
+```
 
 # Build
 

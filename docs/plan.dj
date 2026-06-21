@@ -114,26 +114,8 @@ support.
   - [x] filter tasks by completion state, created datetime, and done/canceled
     datetime in `djot-filter`
 
-- [ ] Add `wait` task metadata for deferred open tasks:
-
-  - `wait` is a quoted RFC 3339 datetime, matching `created`, `due`, `done`,
-    and `canceled`.
-  - `wait` means the task should not appear in "actionable now" views before
-    that datetime. It is not a closed state; `done` and `canceled` remain the
-    closed states.
-  - `wait` is distinct from `due`: `wait` is the earliest useful start time,
-    while `due` is the target or deadline time.
-  - Task queries should expose `wait` alongside the existing task fields.
-    Datetime-valued task fields should be CEL timestamp values, not plain
-    strings, so comparisons across timezone offsets are real instant
-    comparisons.
-  - Task queries should also expose `now` as a special CEL timestamp captured
-    once when `djot-filter` starts. It should stay fixed for the whole command
-    run, so views such as `wait == null || wait <= now` are consistent while
-    scanning multiple files.
-  - Recurring task generation should advance `wait` by the same repeat rule as
-    `due`, preserving the relative lead time between the next instance becoming
-    actionable and becoming due.
+- [x] `wait` task metadata for deferred open tasks, including timestamp task
+  queries, `now`, and recurring-task advancement
 
 # Notes
 
