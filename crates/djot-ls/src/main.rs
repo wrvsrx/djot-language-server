@@ -1170,7 +1170,10 @@ fn task_list_item_conversion(
 
 fn task_completion_edit(text: &str, offset: usize, done: &str) -> Option<TaskCompletionEdit> {
     let task = tasks(text).into_iter().find(|task| {
-        task.done.is_none() && task.range.start <= offset && offset <= task.range.end
+        task.done.is_none()
+            && task.canceled.is_none()
+            && task.range.start <= offset
+            && offset <= task.range.end
     })?;
     let line_start = task_opening_fence_line_start(text, &task.range)?;
     let (_, line_end) = line_bounds(text, line_start)?;
@@ -1196,7 +1199,10 @@ fn recurring_task_completion_edit(
     done: &str,
 ) -> Option<TaskCompletionEdit> {
     let task = tasks(text).into_iter().find(|task| {
-        task.done.is_none() && task.range.start <= offset && offset <= task.range.end
+        task.done.is_none()
+            && task.canceled.is_none()
+            && task.range.start <= offset
+            && offset <= task.range.end
     })?;
     let due = DateTime::parse_from_rfc3339(task.due.as_deref()?).ok()?;
     let recur = task.recur.as_deref()?;
@@ -1535,7 +1541,10 @@ fn is_recurring_instance_attribute(token: &str) -> bool {
         return true;
     }
     let key = token.split_once('=').map_or(token, |(key, _)| key);
-    matches!(key, "created" | "done" | "due" | "recur" | "prev")
+    matches!(
+        key,
+        "created" | "done" | "canceled" | "due" | "recur" | "prev"
+    )
 }
 
 fn next_recur_due(due: DateTime<FixedOffset>, recur: &str) -> Option<DateTime<FixedOffset>> {
@@ -2302,7 +2311,7 @@ mod tests {
 
     #[test]
     fn recurring_attribute_filter_drops_instance_attribute_lines() {
-        let source = "  {#task created=\"2026-06-21T00:00:00Z\" due=\"2026-06-22T00:00:00Z\" recur=\"P1D\" done=\"2026-06-21T12:00:00Z\" prev=\"#old\"}\n  ::: task\n  Title\n  :::\n";
+        let source = "  {#task created=\"2026-06-21T00:00:00Z\" due=\"2026-06-22T00:00:00Z\" recur=\"P1D\" done=\"2026-06-21T12:00:00Z\" canceled=\"2026-06-21T13:00:00Z\" prev=\"#old\"}\n  ::: task\n  Title\n  :::\n";
 
         assert_eq!(
             filter_recurring_instance_attributes(source),
