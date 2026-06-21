@@ -102,6 +102,7 @@ pub struct Task {
     pub done: Option<String>,
     pub canceled: Option<String>,
     pub due: Option<String>,
+    pub wait: Option<String>,
     pub recur: Option<String>,
     pub prev: Option<String>,
 }
@@ -378,6 +379,7 @@ pub fn tasks(text: &str) -> Vec<Task> {
                     done: metadata.done,
                     canceled: metadata.canceled,
                     due: metadata.due,
+                    wait: metadata.wait,
                     recur: metadata.recur,
                     prev: metadata.prev,
                     capturing_title: false,
@@ -1396,6 +1398,7 @@ struct TaskFrame {
     done: Option<String>,
     canceled: Option<String>,
     due: Option<String>,
+    wait: Option<String>,
     recur: Option<String>,
     prev: Option<String>,
     capturing_title: bool,
@@ -1411,6 +1414,7 @@ struct TaskMetadata {
     done: Option<String>,
     canceled: Option<String>,
     due: Option<String>,
+    wait: Option<String>,
     recur: Option<String>,
     prev: Option<String>,
 }
@@ -1423,6 +1427,7 @@ impl TaskMetadata {
             done: datetime_attribute(attrs, "done"),
             canceled: datetime_attribute(attrs, "canceled"),
             due: datetime_attribute(attrs, "due"),
+            wait: datetime_attribute(attrs, "wait"),
             recur: string_attribute(attrs, "recur"),
             prev: string_attribute(attrs, "prev"),
         }
@@ -1461,6 +1466,12 @@ impl TaskMetadata {
                     .due
                     .or_else(|| fallback.and_then(|metadata| metadata.due.clone())),
             },
+            wait: match attrs.get_value("wait") {
+                Some(_) => own.wait,
+                None => own
+                    .wait
+                    .or_else(|| fallback.and_then(|metadata| metadata.wait.clone())),
+            },
             recur: match attrs.get_value("recur") {
                 Some(_) => own.recur,
                 None => own
@@ -1488,6 +1499,7 @@ impl TaskFrame {
             done: self.done,
             canceled: self.canceled,
             due: self.due,
+            wait: self.wait,
             recur: self.recur,
             prev: self.prev,
         }
@@ -1687,7 +1699,7 @@ mod tests {
 
     #[test]
     fn tasks_extract_task_divs() {
-        let text = "{#write-parser}\n{created=\"2026-06-18T09:00:00+08:00\" due=\"2026-06-20T09:00:00+08:00\" done=\"2026-06-19T21:30:00+08:00\" canceled=\"2026-06-19T22:00:00+08:00\" recur=\"P1W\" prev=\"#previous-task\"}\n::: task\nWrite parser.\n\nDetails.\n:::\n\n::: note\nNot a task.\n:::\n";
+        let text = "{#write-parser}\n{created=\"2026-06-18T09:00:00+08:00\" due=\"2026-06-20T09:00:00+08:00\" wait=\"2026-06-19T09:00:00+08:00\" done=\"2026-06-19T21:30:00+08:00\" canceled=\"2026-06-19T22:00:00+08:00\" recur=\"P1W\" prev=\"#previous-task\"}\n::: task\nWrite parser.\n\nDetails.\n:::\n\n::: note\nNot a task.\n:::\n";
         let found = tasks(text);
 
         assert_eq!(found.len(), 1);
@@ -1702,6 +1714,7 @@ mod tests {
             Some("2026-06-19T22:00:00+08:00")
         );
         assert_eq!(found[0].due.as_deref(), Some("2026-06-20T09:00:00+08:00"));
+        assert_eq!(found[0].wait.as_deref(), Some("2026-06-19T09:00:00+08:00"));
         assert_eq!(found[0].recur.as_deref(), Some("P1W"));
         assert_eq!(found[0].prev.as_deref(), Some("#previous-task"));
         assert_eq!(found[0].title, "Write parser.");
@@ -1716,13 +1729,14 @@ mod tests {
 
     #[test]
     fn tasks_inherit_metadata_from_containing_list_item() {
-        let text = "- {#write-parser created=\"2026-06-18T09:00:00Z\" canceled=\"2026-06-18T18:00:00Z\" due=\"2026-06-19T09:00:00Z\" recur=\"P1D\" prev=\"#previous-task\"}\n  ::: task\n  Write parser.\n  :::\n";
+        let text = "- {#write-parser created=\"2026-06-18T09:00:00Z\" canceled=\"2026-06-18T18:00:00Z\" due=\"2026-06-19T09:00:00Z\" wait=\"2026-06-18T21:00:00Z\" recur=\"P1D\" prev=\"#previous-task\"}\n  ::: task\n  Write parser.\n  :::\n";
         let found = tasks(text);
 
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].id.as_deref(), Some("write-parser"));
         assert_eq!(found[0].created.as_deref(), Some("2026-06-18T09:00:00Z"));
         assert_eq!(found[0].due.as_deref(), Some("2026-06-19T09:00:00Z"));
+        assert_eq!(found[0].wait.as_deref(), Some("2026-06-18T21:00:00Z"));
         assert_eq!(found[0].recur.as_deref(), Some("P1D"));
         assert_eq!(found[0].prev.as_deref(), Some("#previous-task"));
         assert_eq!(found[0].done, None);
@@ -1731,17 +1745,28 @@ mod tests {
     }
 
     #[test]
+    fn tasks_prefer_div_wait_over_containing_list_item() {
+        let text = "- {wait=\"2026-06-18T21:00:00Z\"}\n  {wait=\"2026-06-19T09:00:00Z\"}\n  ::: task\n  Write parser.\n  :::\n";
+        let found = tasks(text);
+
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].wait.as_deref(), Some("2026-06-19T09:00:00Z"));
+    }
+
+    #[test]
     fn tasks_reject_date_only_datetime_attributes() {
-        let text = "{created=\"2026-06-18\" done=2026-06-19 canceled=2026-06-20}\n::: task\nDate-only metadata.\n:::\n\n{created=\"2026-06-18T09:00:00Z\" done=\"2026-06-19T13:30:00Z\" canceled=\"2026-06-20T13:30:00Z\"}\n::: task\nDatetime metadata.\n:::\n";
+        let text = "{created=\"2026-06-18\" done=2026-06-19 canceled=2026-06-20 wait=\"2026-06-21\"}\n::: task\nDate-only metadata.\n:::\n\n{created=\"2026-06-18T09:00:00Z\" done=\"2026-06-19T13:30:00Z\" canceled=\"2026-06-20T13:30:00Z\" wait=\"2026-06-21T09:00:00Z\"}\n::: task\nDatetime metadata.\n:::\n";
         let found = tasks(text);
 
         assert_eq!(found.len(), 2);
         assert_eq!(found[0].created, None);
         assert_eq!(found[0].done, None);
         assert_eq!(found[0].canceled, None);
+        assert_eq!(found[0].wait, None);
         assert_eq!(found[1].created.as_deref(), Some("2026-06-18T09:00:00Z"));
         assert_eq!(found[1].done.as_deref(), Some("2026-06-19T13:30:00Z"));
         assert_eq!(found[1].canceled.as_deref(), Some("2026-06-20T13:30:00Z"));
+        assert_eq!(found[1].wait.as_deref(), Some("2026-06-21T09:00:00Z"));
     }
 
     #[test]
