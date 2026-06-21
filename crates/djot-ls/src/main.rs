@@ -1396,8 +1396,9 @@ fn metadata_insertion(text: &str, offset: usize, path: &Path) -> Option<Metadata
     Some(MetadataInsertion {
         insert: 0..0,
         new_text: format!(
-            "{{.metadata}}\n``` toml\ntitle = \"{}\"\n```\n\n",
-            escape_toml_string(&default_metadata_title(path))
+            "{{.metadata}}\n``` toml\ntitle = \"{}\"\ncreated = \"{}\"\n```\n\n",
+            escape_toml_string(&default_metadata_title(path)),
+            created_timestamp()
         ),
     })
 }

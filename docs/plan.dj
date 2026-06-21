@@ -118,5 +118,5 @@ Current metadata semantics are documented in [semantics](semantics.dj#Metadata).
 Remaining work:
 
 - [x] code action to add a leading metadata block with `title` initialized from
-  the file name
+  the file name and `created` initialized to the current RFC 3339 datetime
 - [ ] metadata hover needs a display form rather than the pandoc `Meta` map

@@ -41,9 +41,12 @@ fn code_action_adds_metadata_at_start() {
         edit["range"],
         json!({"start":{"line":0,"character":0},"end":{"line":0,"character":0}})
     );
-    assert_eq!(
-        edit["newText"],
-        json!("{.metadata}\n``` toml\ntitle = \"my-note\"\n```\n\n")
+    let new_text = edit["newText"].as_str().expect("newText is not a string");
+    assert!(new_text.starts_with("{.metadata}\n``` toml\ntitle = \"my-note\"\ncreated = \""));
+    assert!(new_text.ends_with("\"\n```\n\n"));
+    assert_timestamp_shape_with_closing_quote(
+        new_text,
+        "{.metadata}\n``` toml\ntitle = \"my-note\"\ncreated = \"",
     );
 }
 
@@ -295,6 +298,28 @@ fn assert_timestamp_shape(replacement: &str, prefix: &str) {
     let timestamp = replacement
         .strip_prefix(prefix)
         .and_then(|rest| rest.split_once("\"}"))
+        .map(|(timestamp, _)| timestamp)
+        .expect("missing timestamp");
+
+    assert_eq!(timestamp.len(), "2026-06-20T12:34:56Z".len());
+    assert_eq!(&timestamp[4..5], "-");
+    assert_eq!(&timestamp[7..8], "-");
+    assert_eq!(&timestamp[10..11], "T");
+    assert_eq!(&timestamp[13..14], ":");
+    assert_eq!(&timestamp[16..17], ":");
+    assert_eq!(&timestamp[19..20], "Z");
+    assert!(timestamp[..4].chars().all(|c| c.is_ascii_digit()));
+    assert!(timestamp[5..7].chars().all(|c| c.is_ascii_digit()));
+    assert!(timestamp[8..10].chars().all(|c| c.is_ascii_digit()));
+    assert!(timestamp[11..13].chars().all(|c| c.is_ascii_digit()));
+    assert!(timestamp[14..16].chars().all(|c| c.is_ascii_digit()));
+    assert!(timestamp[17..19].chars().all(|c| c.is_ascii_digit()));
+}
+
+fn assert_timestamp_shape_with_closing_quote(replacement: &str, prefix: &str) {
+    let timestamp = replacement
+        .strip_prefix(prefix)
+        .and_then(|rest| rest.split_once('"'))
         .map(|(timestamp, _)| timestamp)
         .expect("missing timestamp");
 

@@ -33,7 +33,7 @@ A document may contain a code block carrying the `metadata` class:
 ``` toml
 title = "Usage Guide"
 author = "wrvsrx"
-date = "2026-06-16"
+created = "2026-06-16T12:34:56Z"
 ```
 ````
 
@@ -42,6 +42,7 @@ minimal:
 
 - `title`: the document title used by tools that need a human-facing document
   name.
+- `created`: the document creation time as an RFC 3339 datetime string.
 
 `djot-export` folds this TOML into pandoc metadata instead of rendering the
 block as body content; Pandoc's native Djot reader handles the underlying syntax

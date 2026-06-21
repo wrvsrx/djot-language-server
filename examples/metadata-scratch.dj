@@ -3,7 +3,7 @@ This file intentionally starts without a `{.metadata}` block.
 Open it with `djot-ls`, put the cursor at the beginning of the file or on this
 first paragraph before any earlier block exists, and ask the editor for code
 actions. `djot-ls` should offer "Add metadata" and insert a leading metadata
-block with `title = "metadata-scratch"`.
+block with `title = "metadata-scratch"` and the current `created` datetime.
 
 # After trying the action
 
@@ -13,5 +13,6 @@ The file should begin with:
 {.metadata}
 ``` toml
 title = "metadata-scratch"
+created = "2026-06-21T12:34:56Z"
 ```
 ````
