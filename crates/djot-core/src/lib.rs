@@ -259,11 +259,11 @@ pub fn build_index(text: &str) -> DocIndex {
                 });
             }
             Event::Start(container, attrs) => {
-                // Any other element with an explicit {#id} is also an anchor.
+                // Any other element with an explicit id is also an anchor.
                 if let Some(id) = attrs.get_value("id") {
                     let id = id.to_string();
                     let rename_range =
-                        explicit_id_range(text, &span, &id).unwrap_or_else(|| span.clone());
+                        anchor_id_range(text, &span, &id).unwrap_or_else(|| span.clone());
                     anchors.entry(id).or_insert_with(|| Anchor {
                         range: span.clone(),
                         rename_range,
@@ -292,7 +292,7 @@ pub fn build_index(text: &str) -> DocIndex {
             Event::End(Container::Heading { .. }) => {
                 if let Some(heading) = open_headings.pop() {
                     let range = heading.start..span.end;
-                    let explicit_range = explicit_id_range(text, &range, &heading.id);
+                    let explicit_range = anchor_id_range(text, &range, &heading.id);
                     let explicit = explicit_range.is_some();
                     let rename_range = explicit_range
                         .or(heading.text_range)
@@ -840,7 +840,7 @@ fn duplicate_anchor_diagnostics(text: &str) -> Vec<AnalysisDiagnostic> {
             Event::Start(_, attrs) => {
                 if let Some(id) = attrs.get_value("id") {
                     let id = id.to_string();
-                    let range = explicit_id_range(text, &span, &id).unwrap_or(span);
+                    let range = anchor_id_range(text, &span, &id).unwrap_or(span);
                     record_anchor_occurrence(&mut seen, &mut diagnostics, id, range);
                 }
             }
@@ -855,7 +855,7 @@ fn duplicate_anchor_diagnostics(text: &str) -> Vec<AnalysisDiagnostic> {
             Event::End(Container::Heading { .. }) => {
                 if let Some(heading) = open_headings.pop() {
                     let range = heading.start..span.end;
-                    let occurrence_range = explicit_id_range(text, &range, &heading.id)
+                    let occurrence_range = anchor_id_range(text, &range, &heading.id)
                         .or(heading.text_range)
                         .unwrap_or_else(|| range.clone());
                     record_anchor_occurrence(
@@ -1017,7 +1017,122 @@ fn path_components(path: &Path) -> Vec<OsString> {
         .collect()
 }
 
-fn explicit_id_range(text: &str, range: &Range<usize>, id: &str) -> Option<Range<usize>> {
+fn anchor_id_range(text: &str, range: &Range<usize>, id: &str) -> Option<Range<usize>> {
+    let source = text.get(range.clone())?;
+    let mut found = None;
+    let mut offset = 0;
+
+    while let Some(relative_start) = source[offset..].find('{') {
+        let start = offset + relative_start;
+        let Some(relative_end) = source[start..].find('}') else {
+            break;
+        };
+        let end = start + relative_end + 1;
+        if let Some(id_range) = attribute_id_range(source, start..end, id) {
+            found = Some(range.start + id_range.start..range.start + id_range.end);
+        }
+        offset = end;
+    }
+
+    found
+}
+
+fn attribute_id_range(source: &str, range: Range<usize>, id: &str) -> Option<Range<usize>> {
+    let bytes = source.as_bytes();
+    let mut i = range.start + 1;
+    let end = range.end.saturating_sub(1);
+    let mut found = None;
+
+    while i < end {
+        while i < end && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i >= end {
+            break;
+        }
+
+        match bytes[i] {
+            b'%' => {
+                i += 1;
+                while i < end && bytes[i] != b'%' {
+                    i += 1;
+                }
+                if i < end {
+                    i += 1;
+                }
+            }
+            b'.' => {
+                i += 1;
+                while i < end && is_attr_name_byte(bytes[i]) {
+                    i += 1;
+                }
+            }
+            b'#' => {
+                let value_start = i + 1;
+                i = value_start;
+                while i < end && is_attr_name_byte(bytes[i]) {
+                    i += 1;
+                }
+                if source.get(value_start..i) == Some(id) {
+                    found = Some(value_start..i);
+                }
+            }
+            byte if is_attr_name_byte(byte) => {
+                let key_start = i;
+                i += 1;
+                while i < end && is_attr_name_byte(bytes[i]) {
+                    i += 1;
+                }
+                let key = &source[key_start..i];
+                if i >= end || bytes[i] != b'=' {
+                    continue;
+                }
+                i += 1;
+
+                let value_range = if i < end && bytes[i] == b'"' {
+                    i += 1;
+                    let value_start = i;
+                    while i < end {
+                        match bytes[i] {
+                            b'\\' => {
+                                i += 1;
+                                if i < end {
+                                    i += 1;
+                                }
+                            }
+                            b'"' => break,
+                            _ => i += 1,
+                        }
+                    }
+                    let value_end = i;
+                    if i < end {
+                        i += 1;
+                    }
+                    value_start..value_end
+                } else {
+                    let value_start = i;
+                    while i < end && is_attr_name_byte(bytes[i]) {
+                        i += 1;
+                    }
+                    value_start..i
+                };
+
+                if key == "id" && source.get(value_range.clone()) == Some(id) {
+                    found = Some(value_range);
+                }
+            }
+            _ => break,
+        }
+    }
+
+    found
+}
+
+fn is_attr_name_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b':' | b'_' | b'-')
+}
+
+fn reference_id_range(text: &str, range: &Range<usize>, id: &str) -> Option<Range<usize>> {
     let source = text.get(range.clone())?;
     let needle = format!("#{id}");
     let start = source.find(&needle)? + 1;
@@ -1034,7 +1149,7 @@ fn reference_target_id_range(
         RefTarget::External { id: Some(id), .. } => id,
         RefTarget::External { id: None, .. } | RefTarget::Url(_) => return None,
     };
-    explicit_id_range(text, source, id)
+    reference_id_range(text, source, id)
 }
 
 fn reference_target_path_range(
@@ -1429,7 +1544,7 @@ mod tests {
 
     #[test]
     fn index_tracks_anchor_rename_ranges() {
-        let text = "# My Heading\n\n{#custom}\nparagraph\n";
+        let text = "# My Heading\n\n{#custom}\nparagraph\n\n{prev=\"#quoted\" id=\"quoted\"}\nquoted paragraph\n\n{id=bare}\nbare paragraph\n\n{id=\"学习-anki\"}\nunicode paragraph\n";
         let index = build_index(text);
 
         let heading = &index.anchors["My-Heading"];
@@ -1439,6 +1554,18 @@ mod tests {
         let explicit = &index.anchors["custom"];
         assert_eq!(&text[explicit.rename_range.clone()], "custom");
         assert!(explicit.explicit);
+
+        let quoted = &index.anchors["quoted"];
+        assert_eq!(&text[quoted.rename_range.clone()], "quoted");
+        assert!(quoted.explicit);
+
+        let bare = &index.anchors["bare"];
+        assert_eq!(&text[bare.rename_range.clone()], "bare");
+        assert!(bare.explicit);
+
+        let unicode = &index.anchors["学习-anki"];
+        assert_eq!(&text[unicode.rename_range.clone()], "学习-anki");
+        assert!(unicode.explicit);
     }
 
     #[test]
@@ -1886,7 +2013,8 @@ mod tests {
     #[test]
     fn workspace_reports_duplicate_anchors() {
         let path = PathBuf::from("/notes/tasks.dj");
-        let doc = "{#task}\n::: task\nFirst task.\n:::\n\n{#task}\n::: task\nSecond task.\n:::\n";
+        let doc =
+            "{id=\"task\"}\n::: task\nFirst task.\n:::\n\n{id=task}\n::: task\nSecond task.\n:::\n";
         let mut ws = Workspace::new();
         ws.insert(path.clone(), doc.to_string());
 
@@ -1896,7 +2024,7 @@ mod tests {
             diagnostics[0].kind,
             DiagnosticKind::DuplicateAnchor {
                 id: "task".into(),
-                first_range: 2..6,
+                first_range: 5..9,
             }
         );
         assert_eq!(&doc[diagnostics[0].range.clone()], "task");
