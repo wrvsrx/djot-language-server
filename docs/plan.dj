@@ -129,6 +129,25 @@ support.
     applying an action to `djot-filter tasks --query ...` results or selected
     skim items.
 
+- [ ] Add task dependency semantics, separate from subtasks:
+
+  - Model dependencies as execution constraints, not document structure.
+    Subtasks may affect rendering later, but dependency fields determine whether
+    a task is blocked or actionable.
+  - Use a Djot/HTML-friendly attribute such as
+    `depends="draft-task other.dj#review"` on task divs or task list items.
+    The value is a whitespace-separated token list of task references.
+  - Treat same-file tokens as task ids, accepting either `draft-task` or
+    `#draft-task`; treat cross-file tokens as `path.dj#task-id`.
+  - Require raw spaces in cross-file paths to be percent-encoded, e.g.
+    `Project%20Plan.dj#review`, so dependency lists can stay whitespace
+    separated.
+  - Normalize dependency targets internally to workspace path plus task id, and
+    emit diagnostics for unresolved targets, non-task targets, self-dependency,
+    and dependency cycles.
+  - Expose query fields such as `depends_on`, `directly_blocking`, `blocked`,
+    and `actionable` once the core dependency graph exists.
+
 - [ ] Add lightweight subtask rendering for nested task divs:
 
   - Treat nested `task` divs as structural subtasks for display purposes, but
