@@ -97,6 +97,7 @@ pub struct Task {
     pub range: Range<usize>,
     pub title_range: Option<Range<usize>>,
     pub title: String,
+    pub depth: usize,
     pub id: Option<String>,
     pub created: Option<String>,
     pub done: Option<String>,
@@ -372,8 +373,10 @@ pub fn tasks(text: &str) -> Vec<Task> {
             Event::Start(Container::Div { class }, attrs) if class == TASK_CLASS => {
                 let inherited = list_item_metadata.last();
                 let metadata = TaskMetadata::from_attributes_with_fallback(&attrs, inherited);
+                let depth = stack.len();
                 stack.push(TaskFrame {
                     range_start: span.start,
+                    depth,
                     id: metadata.id,
                     created: metadata.created,
                     done: metadata.done,
@@ -433,6 +436,7 @@ pub fn tasks(text: &str) -> Vec<Task> {
         }
     }
 
+    tasks.sort_by_key(|task| task.range.start);
     tasks
 }
 
@@ -1393,6 +1397,7 @@ struct HeadingAnchorFrame {
 
 struct TaskFrame {
     range_start: usize,
+    depth: usize,
     id: Option<String>,
     created: Option<String>,
     done: Option<String>,
@@ -1494,6 +1499,7 @@ impl TaskFrame {
             range: self.range_start..range_end,
             title_range: self.title_range,
             title: self.title.trim().to_string(),
+            depth: self.depth,
             id: self.id,
             created: self.created,
             done: self.done,
@@ -1742,6 +1748,26 @@ mod tests {
         assert_eq!(found[0].done, None);
         assert_eq!(found[0].canceled.as_deref(), Some("2026-06-18T18:00:00Z"));
         assert_eq!(found[0].title, "Write parser.");
+    }
+
+    #[test]
+    fn tasks_report_depth_for_nested_task_divs() {
+        let text = "::: task\nParent.\n\n::: task\nChild.\n\n::: task\nGrandchild.\n:::\n:::\n:::\n\n::: task\nSibling.\n:::\n";
+        let found = tasks(text);
+
+        assert_eq!(found.len(), 4);
+        assert_eq!(
+            found
+                .iter()
+                .map(|task| (task.title.as_str(), task.depth))
+                .collect::<Vec<_>>(),
+            vec![
+                ("Parent.", 0),
+                ("Child.", 1),
+                ("Grandchild.", 2),
+                ("Sibling.", 0)
+            ]
+        );
     }
 
     #[test]
