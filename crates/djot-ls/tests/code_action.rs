@@ -231,6 +231,47 @@ fn code_action_marks_list_shaped_task_done() {
 }
 
 #[test]
+fn code_action_marks_inline_list_task_done() {
+    let doc = "- ::: task\n  Write parser.\n  :::\n";
+    let msgs = [
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{},"processId":null,"rootUri":null}}),
+        json!({"jsonrpc":"2.0","method":"initialized","params":{}}),
+        json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tasks.dj","languageId":"djot","version":1,"text":doc}}}),
+        json!({"jsonrpc":"2.0","id":2,"method":"textDocument/codeAction",
+        "params":{
+            "textDocument":{"uri":"file:///tasks.dj"},
+            "range":{"start":{"line":1,"character":4},"end":{"line":1,"character":4}},
+            "context":{"diagnostics":[],"only":["quickfix"]}
+        }}),
+        json!({"jsonrpc":"2.0","id":3,"method":"shutdown","params":null}),
+        json!({"jsonrpc":"2.0","method":"exit","params":null}),
+    ];
+
+    let responses = run_session(&msgs);
+    let actions = responses
+        .iter()
+        .find(|m| m["id"] == json!(2))
+        .expect("no codeAction response")["result"]
+        .as_array()
+        .expect("result is not an array");
+    assert_eq!(actions.len(), 1);
+
+    let action = &actions[0];
+    assert_eq!(action["title"], json!("Mark task done"));
+
+    let edit = &action["edit"]["changes"]["file:///tasks.dj"][0];
+    assert_eq!(
+        edit["range"],
+        json!({"start":{"line":0,"character":0},"end":{"line":0,"character":2}})
+    );
+
+    let inserted = edit["newText"].as_str().expect("newText is not a string");
+    assert!(inserted.starts_with("- {done=\""));
+    assert!(inserted.ends_with("\"}\n  "));
+    assert_timestamp_shape(inserted, "- {done=\"");
+}
+
+#[test]
 fn code_action_does_not_mark_canceled_task_done() {
     let doc = "# Tasks\n\n{canceled=\"2026-06-20T09:30:00Z\"}\n::: task\nCanceled task.\n:::\n";
     let msgs = [

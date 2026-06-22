@@ -1191,20 +1191,15 @@ fn task_completion_edit(text: &str, offset: usize, done: &str) -> Option<TaskCom
             && task.range.start <= offset
             && offset <= task.range.end
     })?;
-    let line_start = task_opening_fence_line_start(text, &task.range)?;
-    let (_, line_end) = line_bounds(text, line_start)?;
-    let line = text.get(line_start..line_end)?;
-    let indent_len = line
-        .char_indices()
-        .find(|(_, c)| *c != ' ' && *c != '\t')
-        .map(|(i, _)| i)
-        .unwrap_or(line.len());
-    let indent = &line[..indent_len];
+    let opening = task_opening_fence(text, &task.range)?;
 
     Some(TaskCompletionEdit {
         edits: vec![TaskTextEdit {
-            range: line_start..line_start,
-            new_text: format!("{indent}{{done=\"{done}\"}}\n"),
+            range: opening.attribute_insert.clone(),
+            new_text: format!(
+                "{}{{done=\"{done}\"}}\n{}",
+                opening.attribute_prefix, opening.fence_prefix
+            ),
         }],
     })
 }
@@ -1228,9 +1223,8 @@ fn recurring_task_completion_edit(
         .as_deref()
         .and_then(|wait| DateTime::parse_from_rfc3339(wait).ok())
         .and_then(|wait| next_recur_due(wait, recur));
-    let line_start = task_opening_fence_line_start(text, &task.range)?;
-    let line = text.get(line_start..line_bounds(text, line_start)?.1)?;
-    let indent = leading_indent(line);
+    let opening = task_opening_fence(text, &task.range)?;
+    let indent = opening.task_indent.as_str();
 
     let anchors = build_index(text).anchors;
     let mut reserved = HashSet::new();
@@ -1255,13 +1249,18 @@ fn recurring_task_completion_edit(
     let current_id_attribute = anchor_attribute(&current_id);
     let next_id_attribute = anchor_attribute(&next_id);
     let div = inherited_task_source(text.get(task.range.clone())?, indent);
-    let list_item = single_task_list_item_context(text, line_start, task.range.end, indent);
+    let list_item = single_task_list_item_context(text, opening.line_start, task.range.end, indent);
 
     let mut done_text = String::new();
+    let mut attribute_prefix = opening.attribute_prefix.as_str();
     if task.id.is_none() {
-        done_text.push_str(&format!("{indent}{current_id_attribute}\n"));
+        done_text.push_str(&format!("{attribute_prefix}{current_id_attribute}\n"));
+        attribute_prefix = opening.continued_attribute_prefix.as_str();
     }
-    done_text.push_str(&format!("{indent}{{done=\"{done}\"}}\n"));
+    done_text.push_str(&format!(
+        "{attribute_prefix}{{done=\"{done}\"}}\n{}",
+        opening.fence_prefix
+    ));
 
     let next_edit = match list_item {
         Some(context) => TaskTextEdit {
@@ -1282,7 +1281,7 @@ fn recurring_task_completion_edit(
     Some(TaskCompletionEdit {
         edits: vec![
             TaskTextEdit {
-                range: line_start..line_start,
+                range: opening.attribute_insert,
                 new_text: done_text,
             },
             next_edit,
@@ -1329,6 +1328,17 @@ fn containing_list_item_start(
     list_indent: &str,
     task_indent: &str,
 ) -> Option<usize> {
+    let (_, current_line_end) = line_bounds(text, task_line_start)?;
+    let current_line = text
+        .get(task_line_start..current_line_end)?
+        .strip_suffix('\r')
+        .unwrap_or(text.get(task_line_start..current_line_end)?);
+    let current_indent = leading_indent(current_line);
+    let current_trimmed = current_line.trim_start();
+    if current_indent == list_indent && current_trimmed.starts_with("- ") {
+        return Some(task_line_start);
+    }
+
     let mut line_start = previous_line_start(text, task_line_start)?;
 
     loop {
@@ -1412,7 +1422,13 @@ fn has_indented_content_after(text: &str, line_end: usize, list_indent: &str) ->
 
 fn count_task_fences(text: &str) -> usize {
     text.lines()
-        .filter(|line| line.trim_start().starts_with("::: task"))
+        .filter(|line| {
+            let trimmed = line.trim_start();
+            trimmed
+                .strip_prefix("- ")
+                .unwrap_or(trimmed)
+                .starts_with("::: task")
+        })
         .count()
 }
 
@@ -1711,13 +1727,22 @@ fn escape_toml_string(value: &str) -> String {
     escaped
 }
 
-fn task_opening_fence_line_start(text: &str, range: &ByteRange<usize>) -> Option<usize> {
+struct TaskOpeningFence {
+    line_start: usize,
+    attribute_insert: ByteRange<usize>,
+    attribute_prefix: String,
+    continued_attribute_prefix: String,
+    fence_prefix: String,
+    task_indent: String,
+}
+
+fn task_opening_fence(text: &str, range: &ByteRange<usize>) -> Option<TaskOpeningFence> {
     let mut offset = range.start;
     while offset <= range.end {
         let (line_start, line_end) = line_bounds(text, offset)?;
         let line = text.get(line_start..line_end)?;
-        if line.trim_start().starts_with("::: task") {
-            return Some(line_start);
+        if let Some(opening) = task_opening_fence_from_line(line_start, line) {
+            return Some(opening);
         }
         if line_end >= range.end || line_end == text.len() {
             break;
@@ -1725,6 +1750,35 @@ fn task_opening_fence_line_start(text: &str, range: &ByteRange<usize>) -> Option
         offset = line_end + '\n'.len_utf8();
     }
     None
+}
+
+fn task_opening_fence_from_line(line_start: usize, line: &str) -> Option<TaskOpeningFence> {
+    let line = line.strip_suffix('\r').unwrap_or(line);
+    let indent = leading_indent(line);
+    let rest = &line[indent.len()..];
+    if rest.starts_with("::: task") {
+        return Some(TaskOpeningFence {
+            line_start,
+            attribute_insert: line_start..line_start,
+            attribute_prefix: indent.to_string(),
+            continued_attribute_prefix: indent.to_string(),
+            fence_prefix: String::new(),
+            task_indent: indent.to_string(),
+        });
+    }
+
+    let fence = rest.strip_prefix("- ")?;
+    if !fence.starts_with("::: task") {
+        return None;
+    }
+    Some(TaskOpeningFence {
+        line_start,
+        attribute_insert: line_start..line_start + indent.len() + "- ".len(),
+        attribute_prefix: format!("{indent}- "),
+        continued_attribute_prefix: format!("{indent}  "),
+        fence_prefix: format!("{indent}  "),
+        task_indent: format!("{indent}  "),
+    })
 }
 
 fn line_bounds(text: &str, offset: usize) -> Option<(usize, usize)> {
