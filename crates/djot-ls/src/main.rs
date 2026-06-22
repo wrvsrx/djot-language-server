@@ -1,15 +1,20 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::HashSet;
 use std::ffi::OsString;
 use std::ops::ControlFlow;
 use std::path::{Component, Path, PathBuf};
 
+mod code_action;
 mod completion;
 mod edit_context;
+mod hover;
 mod lsp_utils;
+mod rename;
 
+use code_action::resolve_code_actions as resolve_code_actions_for_document;
 use completion::*;
-use edit_context::EditContext;
+use hover::{anchor_hover_markdown, file_hover_markdown};
 use lsp_utils::*;
+use rename::{anchor_rename_workspace_edit, path_rename_workspace_edit};
 
 use async_lsp::client_monitor::ClientProcessMonitorLayer;
 use async_lsp::concurrency::ConcurrencyLayer;
@@ -19,28 +24,23 @@ use async_lsp::server::LifecycleLayer;
 use async_lsp::tracing::TracingLayer;
 use async_lsp::{ClientSocket, LanguageServer, ResponseError};
 use djot_core::{
-    heading_outline, metadata_block, metadata_insertion_edit, resolve_target,
-    task_list_item_conversion_edit, task_status_edits_at, AnalysisDiagnostic, DiagnosticKind,
-    Heading, PathRenameError, RefTarget, RenameTargetError, TaskStatus, Workspace,
-    WorkspaceEdit as CoreWorkspaceEdit,
+    heading_outline, metadata_block, resolve_target, AnalysisDiagnostic, DiagnosticKind, Heading,
+    PathRenameError, RefTarget, RenameTargetError, Workspace,
 };
 use futures::future::BoxFuture;
 use lsp_types::{
-    CodeAction, CodeActionKind, CodeActionOptions, CodeActionOrCommand, CodeActionParams,
-    CodeActionProviderCapability, CodeActionResponse, CompletionItem, CompletionItemKind,
-    CompletionOptions, CompletionParams, CompletionResponse, Diagnostic,
-    DiagnosticRelatedInformation, DiagnosticSeverity, DidChangeConfigurationParams,
-    DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
-    DidSaveTextDocumentParams, DocumentChangeOperation, DocumentChanges, DocumentSymbol,
-    DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse,
-    Hover, HoverContents, HoverParams, HoverProviderCapability, InitializeParams, InitializeResult,
-    InitializedParams, Location, MarkupContent, MarkupKind, NumberOrString, OneOf,
-    OptionalVersionedTextDocumentIdentifier, Position, PrepareRenameResponse, ProgressParams,
-    ProgressParamsValue, PublishDiagnosticsParams, ReferenceParams, RenameFile, RenameFileOptions,
-    RenameOptions, RenameParams, ResourceOp, ServerCapabilities, SymbolKind, TextDocumentEdit,
-    TextDocumentPositionParams, TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit, Url,
-    WorkDoneProgress, WorkDoneProgressBegin, WorkDoneProgressEnd, WorkDoneProgressOptions,
-    WorkDoneProgressReport, WorkspaceEdit,
+    CodeActionKind, CodeActionOptions, CodeActionParams, CodeActionProviderCapability,
+    CodeActionResponse, CompletionItem, CompletionItemKind, CompletionOptions, CompletionParams,
+    CompletionResponse, Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity,
+    DidChangeConfigurationParams, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
+    DidOpenTextDocumentParams, DidSaveTextDocumentParams, DocumentSymbol, DocumentSymbolParams,
+    DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents,
+    HoverParams, HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams,
+    Location, MarkupContent, MarkupKind, NumberOrString, OneOf, Position, PrepareRenameResponse,
+    ProgressParams, ProgressParamsValue, PublishDiagnosticsParams, ReferenceParams, RenameOptions,
+    RenameParams, ServerCapabilities, SymbolKind, TextDocumentPositionParams,
+    TextDocumentSyncCapability, TextDocumentSyncKind, Url, WorkDoneProgress, WorkDoneProgressBegin,
+    WorkDoneProgressEnd, WorkDoneProgressOptions, WorkDoneProgressReport, WorkspaceEdit,
 };
 use tower::ServiceBuilder;
 use tracing::Level;
@@ -517,28 +517,12 @@ impl ServerState {
         target_id: &str,
         new_name: String,
     ) -> Result<Option<WorkspaceEdit>, ResponseError> {
-        let edits = self
-            .workspace
-            .anchor_rename_edits(target_path, target_id, &new_name);
-        if edits.is_empty() {
-            return Ok(None);
-        }
-
-        let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
-        for edit in edits {
-            let Some(entry) = self.workspace.get(&edit.path) else {
-                return Ok(None);
-            };
-            let Some(uri) = Url::from_file_path(&edit.path).ok() else {
-                return Ok(None);
-            };
-            changes
-                .entry(uri)
-                .or_default()
-                .push(EditContext::lsp_text_edit(&entry.text, edit.edit));
-        }
-
-        Ok(Some(WorkspaceEdit::new(changes)))
+        Ok(anchor_rename_workspace_edit(
+            &self.workspace,
+            target_path,
+            target_id,
+            &new_name,
+        ))
     }
 
     fn resolve_path_rename(
@@ -569,53 +553,7 @@ impl ServerState {
             return Err(rename_target_exists_error());
         }
 
-        let plan = self
-            .workspace
-            .path_rename_edit_plan(&target.old_path, &new_path);
-        let mut operations = Vec::new();
-        let mut edits_by_path: BTreeMap<PathBuf, Vec<TextEdit>> = BTreeMap::new();
-        for edit in plan {
-            match edit {
-                CoreWorkspaceEdit::RenameFile(edit) => {
-                    let old_uri = Url::from_file_path(&edit.old_path)
-                        .ok()
-                        .ok_or_else(invalid_rename_path_error)?;
-                    let new_uri = Url::from_file_path(&edit.new_path)
-                        .ok()
-                        .ok_or_else(invalid_rename_path_error)?;
-                    operations.push(DocumentChangeOperation::Op(ResourceOp::Rename(
-                        RenameFile {
-                            old_uri,
-                            new_uri,
-                            options: Some(RenameFileOptions {
-                                overwrite: Some(false),
-                                ignore_if_exists: Some(false),
-                            }),
-                            annotation_id: None,
-                        },
-                    )));
-                }
-                CoreWorkspaceEdit::Text(edit) => {
-                    let Some(entry) = self.workspace.get(&edit.path) else {
-                        return Ok(None);
-                    };
-                    edits_by_path
-                        .entry(edit.path)
-                        .or_default()
-                        .push(EditContext::lsp_text_edit(&entry.text, edit.edit));
-                }
-            }
-        }
-
-        for (path, edits) in edits_by_path {
-            let Some(uri) = Url::from_file_path(&path).ok() else {
-                return Ok(None);
-            };
-            operations.push(DocumentChangeOperation::Edit(TextDocumentEdit {
-                text_document: OptionalVersionedTextDocumentIdentifier { uri, version: None },
-                edits: edits.into_iter().map(OneOf::Left).collect(),
-            }));
-        }
+        let edit = path_rename_workspace_edit(&self.workspace, &target.old_path, &new_path)?;
 
         if let Some(entry) = self.workspace.get(&target.old_path) {
             let text = entry.text.clone();
@@ -623,11 +561,7 @@ impl ServerState {
             self.workspace.remove(&target.old_path);
         }
 
-        Ok(Some(WorkspaceEdit {
-            changes: None,
-            document_changes: Some(DocumentChanges::Operations(operations)),
-            change_annotations: None,
-        }))
+        Ok(edit)
     }
 
     fn resolve_new_link_path(&self, from: &Path, new_name: &str) -> Result<PathBuf, ResponseError> {
@@ -790,119 +724,13 @@ impl ServerState {
         let path = params.text_document.uri.to_file_path().ok()?;
         let entry = self.workspace.get(&path)?;
         let offset = position_to_offset(&entry.text, params.range.start);
-        let edit_context = EditContext::now();
-        let mut actions = Vec::new();
-
-        if requested_code_action_kind_matches(
-            params.context.only.as_deref(),
-            &CodeActionKind::REFACTOR_REWRITE,
-        ) {
-            if let Some(insertion) =
-                metadata_insertion_edit(&entry.text, offset, &path, edit_context.timestamp())
-            {
-                let edit = EditContext::single_document_workspace_edit(
-                    params.text_document.uri.clone(),
-                    &entry.text,
-                    vec![insertion],
-                );
-                actions.push(CodeActionOrCommand::CodeAction(CodeAction {
-                    title: "Add metadata".to_string(),
-                    kind: Some(CodeActionKind::REFACTOR_REWRITE),
-                    diagnostics: None,
-                    edit: Some(edit),
-                    command: None,
-                    is_preferred: Some(false),
-                    disabled: None,
-                    data: None,
-                }));
-            }
-
-            if let Some(conversion) =
-                task_list_item_conversion_edit(&entry.text, offset, edit_context.timestamp())
-            {
-                let edit = EditContext::single_document_workspace_edit(
-                    params.text_document.uri.clone(),
-                    &entry.text,
-                    vec![conversion],
-                );
-                actions.push(CodeActionOrCommand::CodeAction(CodeAction {
-                    title: "Convert to task div".to_string(),
-                    kind: Some(CodeActionKind::REFACTOR_REWRITE),
-                    diagnostics: None,
-                    edit: Some(edit),
-                    command: None,
-                    is_preferred: Some(true),
-                    disabled: None,
-                    data: None,
-                }));
-            }
-        }
-
-        if requested_code_action_kind_matches(
-            params.context.only.as_deref(),
-            &CodeActionKind::QUICKFIX,
-        ) {
-            let task_is_blocked = entry
-                .analysis
-                .tasks
-                .iter()
-                .find(|task| {
-                    task.done.is_none()
-                        && task.canceled.is_none()
-                        && task.range.start <= offset
-                        && offset <= task.range.end
-                })
-                .is_some_and(|task| self.workspace.is_task_blocked(&path, &task));
-            if !task_is_blocked {
-                if let Some(completion) = task_status_edits_at(
-                    &entry.text,
-                    offset,
-                    TaskStatus::Done,
-                    edit_context.timestamp(),
-                ) {
-                    let edit = EditContext::single_document_workspace_edit(
-                        params.text_document.uri.clone(),
-                        &entry.text,
-                        completion.edits,
-                    );
-                    actions.push(CodeActionOrCommand::CodeAction(CodeAction {
-                        title: "Complete task".to_string(),
-                        kind: Some(CodeActionKind::QUICKFIX),
-                        diagnostics: None,
-                        edit: Some(edit),
-                        command: None,
-                        is_preferred: Some(true),
-                        disabled: None,
-                        data: None,
-                    }));
-                }
-            }
-
-            if let Some(cancellation) = task_status_edits_at(
-                &entry.text,
-                offset,
-                TaskStatus::Canceled,
-                edit_context.timestamp(),
-            ) {
-                let edit = EditContext::single_document_workspace_edit(
-                    params.text_document.uri.clone(),
-                    &entry.text,
-                    cancellation.edits,
-                );
-                actions.push(CodeActionOrCommand::CodeAction(CodeAction {
-                    title: "Cancel task".to_string(),
-                    kind: Some(CodeActionKind::QUICKFIX),
-                    diagnostics: None,
-                    edit: Some(edit),
-                    command: None,
-                    is_preferred: Some(false),
-                    disabled: None,
-                    data: None,
-                }));
-            }
-        }
-
-        Some(actions)
+        Some(resolve_code_actions_for_document(
+            &self.workspace,
+            params,
+            &path,
+            entry,
+            offset,
+        ))
     }
 
     fn workspace_link_targets(&self, from: &Path) -> Vec<LinkTargetCompletion> {
@@ -970,26 +798,6 @@ impl ServerState {
             .display()
             .to_string()
     }
-}
-
-fn requested_code_action_kind_matches(
-    only: Option<&[CodeActionKind]>,
-    action_kind: &CodeActionKind,
-) -> bool {
-    let Some(only) = only else {
-        return true;
-    };
-    only.iter()
-        .any(|requested| code_action_kind_includes(requested, action_kind))
-}
-
-fn code_action_kind_includes(requested: &CodeActionKind, action_kind: &CodeActionKind) -> bool {
-    let requested = requested.as_str();
-    let action_kind = action_kind.as_str();
-    action_kind == requested
-        || action_kind
-            .strip_prefix(requested)
-            .is_some_and(|suffix| suffix.starts_with('.'))
 }
 
 fn to_lsp_diagnostic(text: &str, uri: &Url, diagnostic: AnalysisDiagnostic) -> Diagnostic {
@@ -1141,72 +949,6 @@ fn lexical_components(path: &Path) -> Option<Vec<OsString>> {
         }
     }
     Some(out)
-}
-
-fn anchor_hover_markdown(
-    display_path: String,
-    id: &str,
-    text: &str,
-    range: &std::ops::Range<usize>,
-) -> String {
-    let kind = if text[range.clone()].trim_start().starts_with('#') {
-        "Heading"
-    } else {
-        "Anchor"
-    };
-    let line = offset_to_position(text, range.start).line + 1;
-    let preview = preview_from_offset(text, range.start, 5);
-    format!(
-        "**{kind}** `{}`\n\n`{}:{line}`\n\n```djot\n{}\n```",
-        escape_markdown_code(id),
-        escape_markdown_code(&display_path),
-        preview
-    )
-}
-
-fn file_hover_markdown(display_path: String, text: &str) -> String {
-    let (line, offset) = first_preview_offset(text);
-    let preview = preview_from_offset(text, offset, 5);
-    if preview.is_empty() {
-        format!(
-            "**File**\n\n`{}:{line}`",
-            escape_markdown_code(&display_path)
-        )
-    } else {
-        format!(
-            "**File**\n\n`{}:{line}`\n\n```djot\n{}\n```",
-            escape_markdown_code(&display_path),
-            preview
-        )
-    }
-}
-
-fn first_preview_offset(text: &str) -> (usize, usize) {
-    text.lines()
-        .scan(0usize, |offset, line| {
-            let current = *offset;
-            *offset += line.len() + 1;
-            Some((current, line))
-        })
-        .enumerate()
-        .find(|(_, (_, line))| !line.trim().is_empty())
-        .map(|(line, (offset, _))| (line + 1, offset))
-        .unwrap_or((1, 0))
-}
-
-fn preview_from_offset(text: &str, offset: usize, max_lines: usize) -> String {
-    let start = text[..offset].rfind('\n').map_or(0, |i| i + 1);
-    text[start..]
-        .lines()
-        .take(max_lines)
-        .collect::<Vec<_>>()
-        .join("\n")
-        .trim_end()
-        .to_string()
-}
-
-fn escape_markdown_code(value: &str) -> String {
-    value.replace('`', "\\`")
 }
 
 /// Convert a core [`Heading`] (byte offsets) into an LSP `DocumentSymbol`.
