@@ -2,7 +2,7 @@
 
 mod support;
 
-use serde_json::json;
+use serde_json::{json, Value};
 
 use support::run_session;
 
@@ -170,9 +170,9 @@ fn code_action_marks_task_div_done() {
         .expect("no codeAction response")["result"]
         .as_array()
         .expect("result is not an array");
-    assert_eq!(actions.len(), 1);
+    assert_eq!(actions.len(), 2);
 
-    let action = &actions[0];
+    let action = code_action_by_title(actions, "Mark task done");
     assert_eq!(action["title"], json!("Mark task done"));
     assert_eq!(action["kind"], json!("quickfix"));
 
@@ -213,9 +213,9 @@ fn code_action_marks_list_shaped_task_done() {
         .expect("no codeAction response")["result"]
         .as_array()
         .expect("result is not an array");
-    assert_eq!(actions.len(), 1);
+    assert_eq!(actions.len(), 2);
 
-    let action = &actions[0];
+    let action = code_action_by_title(actions, "Mark task done");
     assert_eq!(action["title"], json!("Mark task done"));
 
     let edit = &action["edit"]["changes"]["file:///tasks.dj"][0];
@@ -254,9 +254,9 @@ fn code_action_marks_inline_list_task_done() {
         .expect("no codeAction response")["result"]
         .as_array()
         .expect("result is not an array");
-    assert_eq!(actions.len(), 1);
+    assert_eq!(actions.len(), 2);
 
-    let action = &actions[0];
+    let action = code_action_by_title(actions, "Mark task done");
     assert_eq!(action["title"], json!("Mark task done"));
 
     let edit = &action["edit"]["changes"]["file:///tasks.dj"][0];
@@ -299,7 +299,110 @@ fn code_action_does_not_mark_canceled_task_done() {
 }
 
 #[test]
-fn code_action_does_not_mark_blocked_task_done() {
+fn code_action_cancels_task_div() {
+    let doc = "# Tasks\n\n::: task\nWrite parser.\n:::\n";
+    let msgs = [
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{},"processId":null,"rootUri":null}}),
+        json!({"jsonrpc":"2.0","method":"initialized","params":{}}),
+        json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tasks.dj","languageId":"djot","version":1,"text":doc}}}),
+        json!({"jsonrpc":"2.0","id":2,"method":"textDocument/codeAction",
+        "params":{
+            "textDocument":{"uri":"file:///tasks.dj"},
+            "range":{"start":{"line":3,"character":2},"end":{"line":3,"character":2}},
+            "context":{"diagnostics":[],"only":["quickfix"]}
+        }}),
+        json!({"jsonrpc":"2.0","id":3,"method":"shutdown","params":null}),
+        json!({"jsonrpc":"2.0","method":"exit","params":null}),
+    ];
+
+    let responses = run_session(&msgs);
+    let actions = responses
+        .iter()
+        .find(|m| m["id"] == json!(2))
+        .expect("no codeAction response")["result"]
+        .as_array()
+        .expect("result is not an array");
+    assert_eq!(actions.len(), 2);
+
+    let action = code_action_by_title(actions, "Cancel task");
+    assert_eq!(action["kind"], json!("quickfix"));
+
+    let edit = &action["edit"]["changes"]["file:///tasks.dj"][0];
+    assert_eq!(
+        edit["range"],
+        json!({"start":{"line":2,"character":0},"end":{"line":2,"character":0}})
+    );
+
+    let inserted = edit["newText"].as_str().expect("newText is not a string");
+    assert!(inserted.starts_with("{canceled=\""));
+    assert!(inserted.ends_with("\"}\n"));
+    assert_timestamp_shape(inserted, "{canceled=\"");
+}
+
+#[test]
+fn code_action_cancels_recurring_task_and_creates_next_instance() {
+    let doc = "# Tasks\n\n{due=\"2026-06-21T17:00:00+08:00\" recur=\"P1W\"}\n::: task\nWeekly review.\n:::\n";
+    let msgs = [
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{},"processId":null,"rootUri":null}}),
+        json!({"jsonrpc":"2.0","method":"initialized","params":{}}),
+        json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tasks.dj","languageId":"djot","version":1,"text":doc}}}),
+        json!({"jsonrpc":"2.0","id":2,"method":"textDocument/codeAction",
+        "params":{
+            "textDocument":{"uri":"file:///tasks.dj"},
+            "range":{"start":{"line":4,"character":2},"end":{"line":4,"character":2}},
+            "context":{"diagnostics":[],"only":["quickfix"]}
+        }}),
+        json!({"jsonrpc":"2.0","id":3,"method":"shutdown","params":null}),
+        json!({"jsonrpc":"2.0","method":"exit","params":null}),
+    ];
+
+    let responses = run_session(&msgs);
+    let actions = responses
+        .iter()
+        .find(|m| m["id"] == json!(2))
+        .expect("no codeAction response")["result"]
+        .as_array()
+        .expect("result is not an array");
+    assert_eq!(actions.len(), 2);
+
+    let action = code_action_by_title(actions, "Cancel task");
+    let edits = action["edit"]["changes"]["file:///tasks.dj"]
+        .as_array()
+        .expect("changes is not an array");
+    assert_eq!(edits.len(), 2);
+    assert_eq!(
+        edits[0]["range"],
+        json!({"start":{"line":3,"character":0},"end":{"line":3,"character":0}})
+    );
+
+    let inserted = edits[0]["newText"]
+        .as_str()
+        .expect("newText is not a string");
+    assert!(inserted.starts_with("{#Weekly-review-2026-06-21}\n{canceled=\""));
+    assert_timestamp_shape(
+        inserted
+            .strip_prefix("{#Weekly-review-2026-06-21}\n")
+            .unwrap(),
+        "{canceled=\"",
+    );
+
+    assert_eq!(
+        edits[1]["range"],
+        json!({"start":{"line":6,"character":0},"end":{"line":6,"character":0}})
+    );
+    let next_insert = edits[1]["newText"]
+        .as_str()
+        .expect("newText is not a string");
+    assert!(next_insert.contains("{#Weekly-review-2026-06-28}\n"));
+    assert!(next_insert.contains("{created=\"20"));
+    assert!(next_insert.contains(
+        " due=\"2026-06-28T17:00:00+08:00\" recur=\"P1W\" prev=\"#Weekly-review-2026-06-21\"}"
+    ));
+    assert!(next_insert.contains("::: task\nWeekly review.\n:::\n"));
+}
+
+#[test]
+fn code_action_cancels_blocked_task_without_mark_done() {
     let doc =
         "{#draft}\n::: task\nDraft.\n:::\n\n{#review depends=\"#draft\"}\n::: task\nReview.\n:::\n";
     let msgs = [
@@ -323,7 +426,8 @@ fn code_action_does_not_mark_blocked_task_done() {
         .expect("no codeAction response")["result"]
         .as_array()
         .expect("result is not an array");
-    assert!(actions.is_empty());
+    assert_eq!(actions.len(), 1);
+    assert_eq!(actions[0]["title"], json!("Cancel task"));
 }
 
 #[test]
@@ -350,9 +454,9 @@ fn code_action_marks_recurring_task_done_and_creates_next_instance() {
         .expect("no codeAction response")["result"]
         .as_array()
         .expect("result is not an array");
-    assert_eq!(actions.len(), 1);
+    assert_eq!(actions.len(), 2);
 
-    let action = &actions[0];
+    let action = code_action_by_title(actions, "Mark task done");
     assert_eq!(action["title"], json!("Mark task done"));
     assert_eq!(action["kind"], json!("quickfix"));
 
@@ -415,9 +519,10 @@ fn code_action_uses_quoted_id_attribute_for_unicode_recurring_task_ids() {
         .expect("no codeAction response")["result"]
         .as_array()
         .expect("result is not an array");
-    assert_eq!(actions.len(), 1);
+    assert_eq!(actions.len(), 2);
 
-    let edits = actions[0]["edit"]["changes"]["file:///tasks.dj"]
+    let action = code_action_by_title(actions, "Mark task done");
+    let edits = action["edit"]["changes"]["file:///tasks.dj"]
         .as_array()
         .expect("changes is not an array");
     assert_eq!(edits.len(), 2);
@@ -461,9 +566,10 @@ fn code_action_marks_indented_recurring_task_done_and_creates_next_instance() {
         .expect("no codeAction response")["result"]
         .as_array()
         .expect("result is not an array");
-    assert_eq!(actions.len(), 1);
+    assert_eq!(actions.len(), 2);
 
-    let edits = actions[0]["edit"]["changes"]["file:///tasks.dj"]
+    let action = code_action_by_title(actions, "Mark task done");
+    let edits = action["edit"]["changes"]["file:///tasks.dj"]
         .as_array()
         .expect("changes is not an array");
     assert_eq!(edits.len(), 2);
@@ -521,9 +627,10 @@ fn code_action_drops_quoted_id_from_next_recurring_task_instance() {
         .expect("no codeAction response")["result"]
         .as_array()
         .expect("result is not an array");
-    assert_eq!(actions.len(), 1);
+    assert_eq!(actions.len(), 2);
 
-    let edits = actions[0]["edit"]["changes"]["file:///tasks.dj"]
+    let action = code_action_by_title(actions, "Mark task done");
+    let edits = action["edit"]["changes"]["file:///tasks.dj"]
         .as_array()
         .expect("changes is not an array");
     assert_eq!(edits.len(), 2);
@@ -561,7 +668,8 @@ fn code_action_keeps_indented_recurring_task_block_when_list_item_has_extra_cont
         .expect("no codeAction response")["result"]
         .as_array()
         .expect("result is not an array");
-    let edits = actions[0]["edit"]["changes"]["file:///tasks.dj"]
+    let action = code_action_by_title(actions, "Mark task done");
+    let edits = action["edit"]["changes"]["file:///tasks.dj"]
         .as_array()
         .expect("changes is not an array");
     assert_eq!(
@@ -598,6 +706,13 @@ fn assert_timestamp_shape(replacement: &str, prefix: &str) {
     assert!(timestamp[11..13].chars().all(|c| c.is_ascii_digit()));
     assert!(timestamp[14..16].chars().all(|c| c.is_ascii_digit()));
     assert!(timestamp[17..19].chars().all(|c| c.is_ascii_digit()));
+}
+
+fn code_action_by_title<'a>(actions: &'a [Value], title: &str) -> &'a Value {
+    actions
+        .iter()
+        .find(|action| action["title"] == json!(title))
+        .unwrap_or_else(|| panic!("no code action with title {title:?}"))
 }
 
 fn assert_timestamp_shape_with_closing_quote(replacement: &str, prefix: &str) {

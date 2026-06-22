@@ -105,8 +105,9 @@ support.
     datetime, and title
   - [ ] document symbols for tasks
   - [x] code action to add `done`
-  - [x] `done` code action completes recurring task instances by appending the
-    next instance
+  - [x] code action to add `canceled`
+  - [x] `done` and `canceled` code actions complete recurring task instances by
+    appending the next instance
   - [x] for list-shaped recurring tasks, append the next instance as a new list
     item instead of an indented task block in the same list item
   - [ ] code action to remove `done`

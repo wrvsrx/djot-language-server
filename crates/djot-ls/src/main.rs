@@ -847,8 +847,8 @@ impl ServerState {
                 .is_some_and(|task| self.workspace.is_task_blocked(&path, &task));
             if !task_is_blocked {
                 if let Some(completion) =
-                    recurring_task_completion_edit(&entry.text, offset, &timestamp)
-                        .or_else(|| task_completion_edit(&entry.text, offset, &timestamp))
+                    recurring_task_status_edit(&entry.text, offset, "done", &timestamp)
+                        .or_else(|| task_status_edit(&entry.text, offset, "done", &timestamp))
                 {
                     let edits = completion
                         .edits
@@ -875,6 +875,31 @@ impl ServerState {
                         data: None,
                     }));
                 }
+            }
+
+            if let Some(cancellation) =
+                recurring_task_status_edit(&entry.text, offset, "canceled", &timestamp)
+                    .or_else(|| task_status_edit(&entry.text, offset, "canceled", &timestamp))
+            {
+                let edits = cancellation
+                    .edits
+                    .into_iter()
+                    .map(|edit| {
+                        TextEdit::new(byte_range_to_lsp(&entry.text, &edit.range), edit.new_text)
+                    })
+                    .collect();
+                let edit =
+                    WorkspaceEdit::new(HashMap::from([(params.text_document.uri.clone(), edits)]));
+                actions.push(CodeActionOrCommand::CodeAction(CodeAction {
+                    title: "Cancel task".to_string(),
+                    kind: Some(CodeActionKind::QUICKFIX),
+                    diagnostics: None,
+                    edit: Some(edit),
+                    command: None,
+                    is_preferred: Some(false),
+                    disabled: None,
+                    data: None,
+                }));
             }
         }
 
@@ -1184,7 +1209,12 @@ fn task_list_item_conversion(
     })
 }
 
-fn task_completion_edit(text: &str, offset: usize, done: &str) -> Option<TaskCompletionEdit> {
+fn task_status_edit(
+    text: &str,
+    offset: usize,
+    attribute: &str,
+    timestamp: &str,
+) -> Option<TaskCompletionEdit> {
     let task = tasks(text).into_iter().find(|task| {
         task.done.is_none()
             && task.canceled.is_none()
@@ -1197,17 +1227,18 @@ fn task_completion_edit(text: &str, offset: usize, done: &str) -> Option<TaskCom
         edits: vec![TaskTextEdit {
             range: opening.attribute_insert.clone(),
             new_text: format!(
-                "{}{{done=\"{done}\"}}\n{}",
+                "{}{{{attribute}=\"{timestamp}\"}}\n{}",
                 opening.attribute_prefix, opening.fence_prefix
             ),
         }],
     })
 }
 
-fn recurring_task_completion_edit(
+fn recurring_task_status_edit(
     text: &str,
     offset: usize,
-    done: &str,
+    attribute: &str,
+    timestamp: &str,
 ) -> Option<TaskCompletionEdit> {
     let task = tasks(text).into_iter().find(|task| {
         task.done.is_none()
@@ -1251,14 +1282,14 @@ fn recurring_task_completion_edit(
     let div = inherited_task_source(text.get(task.range.clone())?, indent);
     let list_item = single_task_list_item_context(text, opening.line_start, task.range.end, indent);
 
-    let mut done_text = String::new();
+    let mut status_text = String::new();
     let mut attribute_prefix = opening.attribute_prefix.as_str();
     if task.id.is_none() {
-        done_text.push_str(&format!("{attribute_prefix}{current_id_attribute}\n"));
+        status_text.push_str(&format!("{attribute_prefix}{current_id_attribute}\n"));
         attribute_prefix = opening.continued_attribute_prefix.as_str();
     }
-    done_text.push_str(&format!(
-        "{attribute_prefix}{{done=\"{done}\"}}\n{}",
+    status_text.push_str(&format!(
+        "{attribute_prefix}{{{attribute}=\"{timestamp}\"}}\n{}",
         opening.fence_prefix
     ));
 
@@ -1266,14 +1297,14 @@ fn recurring_task_completion_edit(
         Some(context) => TaskTextEdit {
             range: context.insert..context.insert,
             new_text: format!(
-                "\n{list_indent}- {next_id_attribute}\n{indent}{{created=\"{done}\" due=\"{next_due_text}\"{next_wait_attribute} recur=\"{recur}\" prev=\"#{current_id_text}\"}}\n{div}",
+                "\n{list_indent}- {next_id_attribute}\n{indent}{{created=\"{timestamp}\" due=\"{next_due_text}\"{next_wait_attribute} recur=\"{recur}\" prev=\"#{current_id_text}\"}}\n{div}",
                 list_indent = context.list_indent,
             ),
         },
         None => TaskTextEdit {
             range: next_insert..next_insert,
             new_text: format!(
-                "\n\n{indent}{next_id_attribute}\n{indent}{{created=\"{done}\" due=\"{next_due_text}\"{next_wait_attribute} recur=\"{recur}\" prev=\"#{current_id_text}\"}}\n{div}"
+                "\n\n{indent}{next_id_attribute}\n{indent}{{created=\"{timestamp}\" due=\"{next_due_text}\"{next_wait_attribute} recur=\"{recur}\" prev=\"#{current_id_text}\"}}\n{div}"
             ),
         },
     };
@@ -1282,7 +1313,7 @@ fn recurring_task_completion_edit(
         edits: vec![
             TaskTextEdit {
                 range: opening.attribute_insert,
-                new_text: done_text,
+                new_text: status_text,
             },
             next_edit,
         ],
