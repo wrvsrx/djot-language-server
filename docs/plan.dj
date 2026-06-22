@@ -132,12 +132,14 @@ support.
 
 - [ ] Add CLI actions for completing, reopening, and recurring tasks:
 
-  - Support direct task targets such as `path/to/file.dj#task-id`.
-  - Add explicit actions for marking a task done and removing `done`.
-  - Add a recur action that advances an already-completed recurring task by
-    appending the next open instance, preserving the completed task as history.
-  - Reuse the same core task editing semantics as the LSP code actions so CLI
-    and editor behavior stay consistent.
+  - [x] Support direct task targets such as `path/to/file.dj#task-id` for
+    `djot-filter task done`.
+  - [x] Add an explicit action for marking a task done.
+  - [x] Have `done` advance recurring tasks by appending the next open
+    instance.
+  - [ ] Add actions for removing `done`, canceling tasks, and reopening tasks.
+  - [ ] Reuse the same core task editing semantics as the LSP code actions so
+    CLI and editor behavior stay consistent.
   - Consider batch and interactive forms after the direct action exists, such as
     applying an action to `djot-filter task --query ...` results or selected
     skim items.
