@@ -160,15 +160,17 @@ support.
   - Expose query fields such as `depends_on`, `directly_blocking`, `blocked`,
     and `actionable` once the core dependency graph exists.
 
-- [ ] Add lightweight subtask rendering for nested task divs:
+- [x] Add lightweight subtask rendering for nested task divs:
 
   - Treat nested `task` divs as structural subtasks for display purposes, but
     do not add parent/child query semantics in the first pass.
   - Add a task depth field from `djot-core::tasks`; depth is enough for
     rendering and avoids deciding how to identify anonymous parent tasks.
-  - Keep `djot-filter task` as the current flat table by default.
-  - Add `djot-filter task --tree` to render nested tasks by prefixing the title
-    column with ASCII markers, such as `> Child task` and `  > Grandchild task`.
+  - Render nested tasks by default by prefixing the title column with ASCII
+    markers, such as `> Child task` and `  > Grandchild task`.
+  - Add `djot-filter task --flat` for callers that want raw titles.
+  - Keep output sorted by root-relative path, then by source order within each
+    file.
   - Keep table columns unchanged; only the title cell changes in tree mode.
   - Leave richer fields such as `parent`, `children`, `has_open_children`, and
     dependency-aware `actionable` for a later semantic pass.

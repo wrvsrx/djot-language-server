@@ -62,7 +62,7 @@ fn main() -> ExitCode {
                 print_paths(paths.into_iter().map(|path| display_path(&root, &path)));
             }
         }
-        CommandMode::Task => {
+        CommandMode::Task(task) => {
             let plan = match config.query.as_deref() {
                 Some(query) => match QueryPlan::compile(query) {
                     Ok(plan) => Some(plan),
@@ -73,7 +73,7 @@ fn main() -> ExitCode {
                 },
                 None => None,
             };
-            if let Err(err) = print_tasks(&root, &docs, plan.as_ref()) {
+            if let Err(err) = print_tasks(&root, &docs, plan.as_ref(), !task.flat) {
                 eprintln!("djot-filter: {err}");
                 return ExitCode::FAILURE;
             }
@@ -107,7 +107,7 @@ enum CommandMode {
     Note(NoteConfig),
 
     /// Print tasks found in scanned Djot files.
-    Task,
+    Task(TaskConfig),
 }
 
 #[derive(Debug, Args)]
@@ -115,6 +115,13 @@ struct NoteConfig {
     /// Re-filter results interactively with skim.
     #[arg(short, long)]
     interactive: bool,
+}
+
+#[derive(Debug, Args)]
+struct TaskConfig {
+    /// Print task titles without nested task tree markers.
+    #[arg(long)]
+    flat: bool,
 }
 
 struct LoadedDocs {
@@ -650,7 +657,12 @@ fn editor_paths(root: &Path, selected: &[String]) -> Vec<PathBuf> {
         .collect()
 }
 
-fn print_tasks(root: &Path, docs: &LoadedDocs, plan: Option<&QueryPlan>) -> Result<(), String> {
+fn print_tasks(
+    root: &Path,
+    docs: &LoadedDocs,
+    plan: Option<&QueryPlan>,
+    tree: bool,
+) -> Result<(), String> {
     let mut records = Vec::new();
     for path in &docs.paths {
         let Some(text) = docs.texts.get(path) else {
@@ -658,7 +670,7 @@ fn print_tasks(root: &Path, docs: &LoadedDocs, plan: Option<&QueryPlan>) -> Resu
         };
         for task in tasks(text) {
             if task_matches(root, path, &task, plan)? {
-                records.push(task_output_record(root, path, &task));
+                records.push(task_output_record(root, path, &task, tree));
             }
         }
     }
@@ -692,7 +704,7 @@ fn task_matches(
     })
 }
 
-fn task_output_record(root: &Path, path: &Path, task: &Task) -> TaskOutputRecord {
+fn task_output_record(root: &Path, path: &Path, task: &Task, tree: bool) -> TaskOutputRecord {
     let status = if task.canceled.is_some() {
         "x"
     } else if task.done.is_some() {
@@ -706,9 +718,16 @@ fn task_output_record(root: &Path, path: &Path, task: &Task) -> TaskOutputRecord
     };
     TaskOutputRecord {
         status: status.to_string(),
-        title: task.title.clone(),
+        title: task_title(task, tree),
         source,
     }
+}
+
+fn task_title(task: &Task, tree: bool) -> String {
+    if !tree || task.depth == 0 {
+        return task.title.clone();
+    }
+    format!("{}> {}", "  ".repeat(task.depth - 1), task.title)
 }
 
 fn task_table(records: &[TaskOutputRecord]) -> String {
@@ -816,9 +835,22 @@ mod tests {
             "done == null",
         ]);
 
-        assert!(matches!(config.command, CommandMode::Task));
+        assert!(matches!(
+            config.command,
+            CommandMode::Task(TaskConfig { flat: false })
+        ));
         assert_eq!(config.root.as_deref(), Some(Path::new("notes")));
         assert_eq!(config.query.as_deref(), Some("done == null"));
+    }
+
+    #[test]
+    fn task_subcommand_accepts_flat_flag() {
+        let config = Config::parse_from(["djot-filter", "task", "--flat"]);
+
+        assert!(matches!(
+            config.command,
+            CommandMode::Task(TaskConfig { flat: true })
+        ));
     }
 
     #[test]
@@ -938,9 +970,9 @@ mod tests {
         assert!(!task_matches(&root, &path, &found[1], Some(&waiting)).unwrap());
         assert!(task_matches(&root, &path, &found[0], Some(&source)).unwrap());
         assert!(!task_matches(&root, &path, &found[1], Some(&source)).unwrap());
-        let open_row = task_output_record(&root, &path, &found[0]);
-        let done_row = task_output_record(&root, &path, &found[1]);
-        let canceled_row = task_output_record(&root, &path, &found[2]);
+        let open_row = task_output_record(&root, &path, &found[0], false);
+        let done_row = task_output_record(&root, &path, &found[1], false);
+        let canceled_row = task_output_record(&root, &path, &found[2], false);
         assert_eq!(
             open_row,
             TaskOutputRecord {
@@ -964,6 +996,39 @@ mod tests {
                 title: "Canceled task".to_string(),
                 source: "tasks.dj".to_string(),
             }
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn task_output_prefixes_nested_titles_by_default() {
+        let root = unique_test_dir("djot-filter-task-tree-test");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("tasks.dj"),
+            "::: task\nParent\n\n::: task\nChild\n\n::: task\nGrandchild\n:::\n:::\n:::\n",
+        )
+        .unwrap();
+
+        let docs = load_docs(&root).unwrap();
+        let path = normalize(&root.join("tasks.dj"));
+        let text = docs.texts.get(&path).unwrap();
+        let found = tasks(text);
+
+        assert_eq!(
+            found
+                .iter()
+                .map(|task| task_output_record(&root, &path, task, true).title)
+                .collect::<Vec<_>>(),
+            vec!["Parent", "> Child", "  > Grandchild"]
+        );
+        assert_eq!(
+            found
+                .iter()
+                .map(|task| task_output_record(&root, &path, task, false).title)
+                .collect::<Vec<_>>(),
+            vec!["Parent", "Child", "Grandchild"]
         );
 
         let _ = std::fs::remove_dir_all(root);
