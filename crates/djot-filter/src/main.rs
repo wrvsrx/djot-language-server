@@ -25,7 +25,7 @@ fn main() -> ExitCode {
     };
 
     match &config.command {
-        CommandMode::Notes(notes) => {
+        CommandMode::Note(note) => {
             let mut paths = docs.paths.clone();
             if let Some(query) = &config.query {
                 let plan = match QueryPlan::compile(query) {
@@ -45,7 +45,7 @@ fn main() -> ExitCode {
             }
 
             paths.sort();
-            if notes.interactive {
+            if note.interactive {
                 match run_interactive(&root, &paths, &docs.texts) {
                     Ok(action) => {
                         if let Err(err) = handle_interactive_action(&root, action) {
@@ -62,7 +62,7 @@ fn main() -> ExitCode {
                 print_paths(paths.into_iter().map(|path| display_path(&root, &path)));
             }
         }
-        CommandMode::Tasks => {
+        CommandMode::Task => {
             let plan = match config.query.as_deref() {
                 Some(query) => match QueryPlan::compile(query) {
                     Ok(plan) => Some(plan),
@@ -104,14 +104,14 @@ struct Config {
 #[derive(Debug, Subcommand)]
 enum CommandMode {
     /// Filter note files under the scanned directory.
-    Notes(NotesConfig),
+    Note(NoteConfig),
 
     /// Print tasks found in scanned Djot files.
-    Tasks,
+    Task,
 }
 
 #[derive(Debug, Args)]
-struct NotesConfig {
+struct NoteConfig {
     /// Re-filter results interactively with skim.
     #[arg(short, long)]
     interactive: bool,
@@ -780,16 +780,16 @@ mod tests {
         let config = Config {
             root: None,
             query: None,
-            command: CommandMode::Notes(NotesConfig { interactive: false }),
+            command: CommandMode::Note(NoteConfig { interactive: false }),
         };
         assert_eq!(default_root(&config), absolute_path(Path::new(".")));
     }
 
     #[test]
-    fn notes_subcommand_accepts_root_query_and_interactive_after_subcommand() {
+    fn note_subcommand_accepts_root_query_and_interactive_after_subcommand() {
         let config = Config::parse_from([
             "djot-filter",
-            "notes",
+            "note",
             "--root",
             "notes",
             "--query",
@@ -799,24 +799,24 @@ mod tests {
 
         assert!(matches!(
             config.command,
-            CommandMode::Notes(NotesConfig { interactive: true })
+            CommandMode::Note(NoteConfig { interactive: true })
         ));
         assert_eq!(config.root.as_deref(), Some(Path::new("notes")));
         assert_eq!(config.query.as_deref(), Some("title.matches('topic')"));
     }
 
     #[test]
-    fn tasks_subcommand_accepts_root_and_query_after_subcommand() {
+    fn task_subcommand_accepts_root_and_query_after_subcommand() {
         let config = Config::parse_from([
             "djot-filter",
-            "tasks",
+            "task",
             "--root",
             "notes",
             "--query",
             "done == null",
         ]);
 
-        assert!(matches!(config.command, CommandMode::Tasks));
+        assert!(matches!(config.command, CommandMode::Task));
         assert_eq!(config.root.as_deref(), Some(Path::new("notes")));
         assert_eq!(config.query.as_deref(), Some("done == null"));
     }
@@ -825,6 +825,15 @@ mod tests {
     fn default_notes_command_is_removed() {
         let err = Config::try_parse_from(["djot-filter", "--query", "true"]).unwrap_err();
         assert_eq!(err.kind(), clap::error::ErrorKind::MissingSubcommand);
+    }
+
+    #[test]
+    fn plural_subcommands_are_rejected() {
+        let notes_err = Config::try_parse_from(["djot-filter", "notes"]).unwrap_err();
+        assert_eq!(notes_err.kind(), clap::error::ErrorKind::InvalidSubcommand);
+
+        let tasks_err = Config::try_parse_from(["djot-filter", "tasks"]).unwrap_err();
+        assert_eq!(tasks_err.kind(), clap::error::ErrorKind::InvalidSubcommand);
     }
 
     #[test]

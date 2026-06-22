@@ -66,10 +66,10 @@ a code block.
 match all filters. If no directory is given, it scans the current directory:
 
 ``` sh
-djot-filter notes --query 'title.matches("semantics")'
-djot-filter notes --root docs --query 'title.matches("semantics")'
-djot-filter notes --root notes --query '"index.dj" in transitively_referenced_by'
-djot-filter notes --root notes --query 'path.startsWith("docs/")' --interactive
+djot-filter note --query 'title.matches("semantics")'
+djot-filter note --root docs --query 'title.matches("semantics")'
+djot-filter note --root notes --query '"index.dj" in transitively_referenced_by'
+djot-filter note --root notes --query 'path.startsWith("docs/")' --interactive
 ```
 
 `--query EXPR` keeps files whose CEL expression evaluates to true. The query
@@ -82,7 +82,7 @@ files with `EDITOR`. In interactive mode, `ctrl-n` creates a new file from the
 current query, relative to `--root`, adds a `.dj` extension when the query has
 no `.dj` / `.djot` extension, and opens it with `EDITOR`.
 
-The `tasks` subcommand prints task blocks and applies the same `--query`
+The `task` subcommand prints task blocks and applies the same `--query`
 mechanism to task records. Task output uses `-` for open tasks, `o` for done
 tasks, and `x` for canceled tasks. Task queries expose `path`, `id`, `title`,
 `created`, `due`, `wait`, `done`, `canceled`, `recur`, `prev`, and `now`.
@@ -90,7 +90,7 @@ Datetime-valued task fields and `now` are CEL timestamps, so time comparisons
 work across timezone offsets:
 
 ``` sh
-djot-filter tasks --query 'done == null && canceled == null && (wait == null || wait <= now)'
+djot-filter task --query 'done == null && canceled == null && (wait == null || wait <= now)'
 ```
 
 ## Build

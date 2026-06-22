@@ -139,7 +139,7 @@ support.
   - Reuse the same core task editing semantics as the LSP code actions so CLI
     and editor behavior stay consistent.
   - Consider batch and interactive forms after the direct action exists, such as
-    applying an action to `djot-filter tasks --query ...` results or selected
+    applying an action to `djot-filter task --query ...` results or selected
     skim items.
 
 - [ ] Add task dependency semantics, separate from subtasks:
@@ -166,8 +166,8 @@ support.
     do not add parent/child query semantics in the first pass.
   - Add a task depth field from `djot-core::tasks`; depth is enough for
     rendering and avoids deciding how to identify anonymous parent tasks.
-  - Keep `djot-filter tasks` as the current flat table by default.
-  - Add `djot-filter tasks --tree` to render nested tasks by prefixing the title
+  - Keep `djot-filter task` as the current flat table by default.
+  - Add `djot-filter task --tree` to render nested tasks by prefixing the title
     column with ASCII markers, such as `> Child task` and `  > Grandchild task`.
   - Keep table columns unchanged; only the title cell changes in tree mode.
   - Leave richer fields such as `parent`, `children`, `has_open_children`, and
