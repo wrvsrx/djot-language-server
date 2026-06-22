@@ -3,13 +3,17 @@ use std::ffi::OsString;
 use std::ops::{ControlFlow, Range as ByteRange};
 use std::path::{Component, Path, PathBuf};
 
+mod lsp_utils;
+
+use lsp_utils::*;
+
 use async_lsp::client_monitor::ClientProcessMonitorLayer;
 use async_lsp::concurrency::ConcurrencyLayer;
 use async_lsp::panic::CatchUnwindLayer;
 use async_lsp::router::Router;
 use async_lsp::server::LifecycleLayer;
 use async_lsp::tracing::TracingLayer;
-use async_lsp::{ClientSocket, ErrorCode, LanguageServer, ResponseError};
+use async_lsp::{ClientSocket, LanguageServer, ResponseError};
 use chrono::{Local, SecondsFormat};
 use djot_core::{
     heading_outline, metadata_block, metadata_insertion_edit, resolve_target,
@@ -30,12 +34,11 @@ use lsp_types::{
     Hover, HoverContents, HoverParams, HoverProviderCapability, InitializeParams, InitializeResult,
     InitializedParams, Location, MarkupContent, MarkupKind, NumberOrString, OneOf,
     OptionalVersionedTextDocumentIdentifier, Position, PrepareRenameResponse, ProgressParams,
-    ProgressParamsValue, PublishDiagnosticsParams, Range, ReferenceParams, RenameFile,
-    RenameFileOptions, RenameOptions, RenameParams, ResourceOp, ResourceOperationKind,
-    ServerCapabilities, SymbolKind, TextDocumentEdit, TextDocumentPositionParams,
-    TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit, Url, WorkDoneProgress,
-    WorkDoneProgressBegin, WorkDoneProgressEnd, WorkDoneProgressOptions, WorkDoneProgressReport,
-    WorkspaceEdit,
+    ProgressParamsValue, PublishDiagnosticsParams, ReferenceParams, RenameFile, RenameFileOptions,
+    RenameOptions, RenameParams, ResourceOp, ServerCapabilities, SymbolKind, TextDocumentEdit,
+    TextDocumentPositionParams, TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit, Url,
+    WorkDoneProgress, WorkDoneProgressBegin, WorkDoneProgressEnd, WorkDoneProgressOptions,
+    WorkDoneProgressReport, WorkspaceEdit,
 };
 use tower::ServiceBuilder;
 use tracing::Level;
@@ -55,13 +58,6 @@ struct ServerState {
     workspace_edit_capabilities: ClientWorkspaceEditCapabilities,
     /// Open buffers that should receive publishDiagnostics updates.
     open_documents: HashSet<PathBuf>,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Clone, Copy, Default)]
-struct ClientWorkspaceEditCapabilities {
-    document_changes: bool,
-    rename_resource_operation: bool,
 }
 
 impl LanguageServer for ServerState {
@@ -1267,74 +1263,6 @@ fn completion_item(
     }
 }
 
-fn is_valid_anchor_id(id: &str) -> bool {
-    !id.is_empty() && !id.contains('#') && !id.chars().any(char::is_whitespace)
-}
-
-fn is_valid_link_path_rename(path: &str) -> bool {
-    !path.is_empty()
-        && !path.contains('#')
-        && !path.contains("://")
-        && !path.starts_with("mailto:")
-        && Path::new(path).is_relative()
-}
-
-fn implicit_heading_rename_error() -> ResponseError {
-    ResponseError::new(
-        ErrorCode::INVALID_REQUEST,
-        "Renaming implicit heading anchors is not supported yet; add an explicit {#id} anchor or rename the heading text.",
-    )
-}
-
-fn document_changes_capability_error() -> ResponseError {
-    ResponseError::new(
-        ErrorCode::INVALID_REQUEST,
-        "Renaming link paths requires client support for workspace.workspaceEdit.documentChanges.",
-    )
-}
-
-fn rename_resource_operation_capability_error() -> ResponseError {
-    ResponseError::new(
-        ErrorCode::INVALID_REQUEST,
-        "Renaming link paths requires client support for the workspace.workspaceEdit.resourceOperations rename operation.",
-    )
-}
-
-fn invalid_rename_path_error() -> ResponseError {
-    ResponseError::new(
-        ErrorCode::INVALID_PARAMS,
-        "Rename path must be a relative Djot file path without a fragment.",
-    )
-}
-
-fn non_djot_path_rename_error() -> ResponseError {
-    ResponseError::new(
-        ErrorCode::INVALID_REQUEST,
-        "Only Djot file links can be renamed.",
-    )
-}
-
-fn unindexed_path_rename_error() -> ResponseError {
-    ResponseError::new(
-        ErrorCode::INVALID_REQUEST,
-        "Cannot rename a link path whose target is not indexed in the workspace.",
-    )
-}
-
-fn rename_target_exists_error() -> ResponseError {
-    ResponseError::new(
-        ErrorCode::INVALID_REQUEST,
-        "Cannot rename link path because the target path already exists.",
-    )
-}
-
-fn rename_target_outside_workspace_error() -> ResponseError {
-    ResponseError::new(
-        ErrorCode::INVALID_REQUEST,
-        "Cannot rename link path outside the workspace.",
-    )
-}
-
 fn to_lsp_diagnostic(text: &str, uri: &Url, diagnostic: AnalysisDiagnostic) -> Diagnostic {
     let (code, message, related_information, severity) = match diagnostic.kind {
         DiagnosticKind::UnresolvedAnchor { id } => (
@@ -1610,53 +1538,6 @@ fn to_document_symbol(text: &str, heading: &Heading) -> DocumentSymbol {
     }
 }
 
-/// Convert a byte range into an LSP `Range`.
-fn byte_range_to_lsp(text: &str, range: &std::ops::Range<usize>) -> Range {
-    Range {
-        start: offset_to_position(text, range.start),
-        end: offset_to_position(text, range.end),
-    }
-}
-
-/// Convert an LSP `Position` (line + UTF-16 column) into a byte offset.
-fn position_to_offset(text: &str, pos: Position) -> usize {
-    let mut line = 0u32;
-    let mut character = 0u32;
-    for (i, c) in text.char_indices() {
-        if line == pos.line && character == pos.character {
-            return i;
-        }
-        if c == '\n' {
-            if line == pos.line {
-                return i; // position is past the line's end: clamp to line end
-            }
-            line += 1;
-            character = 0;
-        } else {
-            character += c.len_utf16() as u32;
-        }
-    }
-    text.len()
-}
-
-/// Convert a byte offset into an LSP `Position` (line + UTF-16 column).
-fn offset_to_position(text: &str, offset: usize) -> Position {
-    let mut line = 0u32;
-    let mut character = 0u32;
-    for (i, c) in text.char_indices() {
-        if i >= offset {
-            break;
-        }
-        if c == '\n' {
-            line += 1;
-            character = 0;
-        } else {
-            character += c.len_utf16() as u32;
-        }
-    }
-    Position { line, character }
-}
-
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     let (server, _) = async_lsp::MainLoop::new_server(|client| {
@@ -1686,44 +1567,6 @@ async fn main() {
     let stdout = async_lsp::stdio::PipeStdout::lock_tokio().unwrap();
 
     server.run_buffered(stdin, stdout).await.unwrap();
-}
-
-fn workspace_roots(params: &InitializeParams) -> Vec<PathBuf> {
-    if let Some(folders) = &params.workspace_folders {
-        folders
-            .iter()
-            .filter_map(|folder| folder.uri.to_file_path().ok())
-            .collect()
-    } else {
-        #[allow(deprecated)]
-        params
-            .root_uri
-            .as_ref()
-            .and_then(|uri| uri.to_file_path().ok())
-            .into_iter()
-            .collect()
-    }
-}
-
-fn client_workspace_edit_capabilities(
-    params: &InitializeParams,
-) -> ClientWorkspaceEditCapabilities {
-    let Some(workspace_edit) = params
-        .capabilities
-        .workspace
-        .as_ref()
-        .and_then(|workspace| workspace.workspace_edit.as_ref())
-    else {
-        return ClientWorkspaceEditCapabilities::default();
-    };
-
-    ClientWorkspaceEditCapabilities {
-        document_changes: workspace_edit.document_changes == Some(true),
-        rename_resource_operation: workspace_edit
-            .resource_operations
-            .as_ref()
-            .is_some_and(|operations| operations.contains(&ResourceOperationKind::Rename)),
-    }
 }
 
 fn index_djot_files(root: &Path, insert: &mut impl FnMut(PathBuf, String)) -> usize {
