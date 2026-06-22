@@ -12,8 +12,9 @@ use async_lsp::tracing::TracingLayer;
 use async_lsp::{ClientSocket, ErrorCode, LanguageServer, ResponseError};
 use chrono::{Local, SecondsFormat};
 use djot_core::{
-    heading_outline, metadata_block, resolve_target, task_status_edits_at, AnalysisDiagnostic,
-    DiagnosticKind, Heading, PathRenameError, RefTarget, RenameTargetError, TaskStatus, Workspace,
+    heading_outline, metadata_block, metadata_insertion_edit, resolve_target,
+    task_list_item_conversion_edit, task_status_edits_at, AnalysisDiagnostic, DiagnosticKind,
+    Heading, PathRenameError, RefTarget, RenameTargetError, TaskStatus, Workspace,
 };
 use futures::future::BoxFuture;
 use jotdown::{Container, Event, Parser};
@@ -791,8 +792,10 @@ impl ServerState {
             params.context.only.as_deref(),
             &CodeActionKind::REFACTOR_REWRITE,
         ) {
-            if let Some(insertion) = metadata_insertion(&entry.text, offset, &path) {
-                let range = byte_range_to_lsp(&entry.text, &insertion.insert);
+            if let Some(insertion) =
+                metadata_insertion_edit(&entry.text, offset, &path, &created_timestamp())
+            {
+                let range = byte_range_to_lsp(&entry.text, &insertion.range);
                 let edit = WorkspaceEdit::new(HashMap::from([(
                     params.text_document.uri.clone(),
                     vec![TextEdit::new(range, insertion.new_text)],
@@ -810,12 +813,12 @@ impl ServerState {
             }
 
             if let Some(conversion) =
-                task_list_item_conversion(&entry.text, offset, &created_timestamp())
+                task_list_item_conversion_edit(&entry.text, offset, &created_timestamp())
             {
-                let range = byte_range_to_lsp(&entry.text, &conversion.replace);
+                let range = byte_range_to_lsp(&entry.text, &conversion.range);
                 let edit = WorkspaceEdit::new(HashMap::from([(
                     params.text_document.uri.clone(),
-                    vec![TextEdit::new(range, conversion.replacement)],
+                    vec![TextEdit::new(range, conversion.new_text)],
                 )]));
                 actions.push(CodeActionOrCommand::CodeAction(CodeAction {
                     title: "Convert to task div".to_string(),
@@ -982,16 +985,6 @@ struct LinkTargetCompletion {
 struct AnchorCompletion {
     id: String,
     path: String,
-}
-
-struct TaskListItemConversion {
-    replace: ByteRange<usize>,
-    replacement: String,
-}
-
-struct MetadataInsertion {
-    insert: ByteRange<usize>,
-    new_text: String,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1170,84 +1163,6 @@ fn label_completion_replace_end(text: &str, offset: usize, limit: usize) -> usiz
     } else {
         offset
     }
-}
-
-fn task_list_item_conversion(
-    text: &str,
-    offset: usize,
-    created: &str,
-) -> Option<TaskListItemConversion> {
-    let (line_start, line_end) = line_bounds(text, offset)?;
-    let line = text.get(line_start..line_end)?;
-    let content = line.strip_suffix('\r').unwrap_or(line);
-    let indent_len = content
-        .char_indices()
-        .find(|(_, c)| *c != ' ' && *c != '\t')
-        .map(|(i, _)| i)
-        .unwrap_or(content.len());
-    let indent = &content[..indent_len];
-    let rest = &content[indent_len..];
-    let title = rest.strip_prefix("- [ ] ")?.trim();
-    if title.is_empty() {
-        return None;
-    }
-
-    Some(TaskListItemConversion {
-        replace: line_start..line_end,
-        replacement: format!(
-            "{indent}- {{created=\"{created}\"}}\n{indent}  ::: task\n{indent}  {title}\n{indent}  :::"
-        ),
-    })
-}
-
-fn metadata_insertion(text: &str, offset: usize, path: &Path) -> Option<MetadataInsertion> {
-    if metadata_block(text).is_some() || !text.get(..offset)?.trim().is_empty() {
-        return None;
-    }
-
-    Some(MetadataInsertion {
-        insert: 0..0,
-        new_text: format!(
-            "{{.metadata}}\n``` toml\ntitle = \"{}\"\ncreated = \"{}\"\n```\n\n",
-            escape_toml_string(&default_metadata_title(path)),
-            created_timestamp()
-        ),
-    })
-}
-
-fn default_metadata_title(path: &Path) -> String {
-    path.file_stem()
-        .and_then(|stem| stem.to_str())
-        .filter(|stem| !stem.is_empty())
-        .unwrap_or("Untitled")
-        .to_string()
-}
-
-fn escape_toml_string(value: &str) -> String {
-    let mut escaped = String::new();
-    for c in value.chars() {
-        match c {
-            '\\' => escaped.push_str("\\\\"),
-            '"' => escaped.push_str("\\\""),
-            '\n' => escaped.push_str("\\n"),
-            '\r' => escaped.push_str("\\r"),
-            '\t' => escaped.push_str("\\t"),
-            c if c.is_control() => {
-                escaped.push_str(&format!("\\u{:04X}", c as u32));
-            }
-            c => escaped.push(c),
-        }
-    }
-    escaped
-}
-
-fn line_bounds(text: &str, offset: usize) -> Option<(usize, usize)> {
-    if offset > text.len() {
-        return None;
-    }
-    let start = text[..offset].rfind('\n').map_or(0, |i| i + 1);
-    let end = text[offset..].find('\n').map_or(text.len(), |i| offset + i);
-    Some((start, end))
 }
 
 fn requested_code_action_kind_matches(

@@ -130,10 +130,12 @@ pub struct TaskDependency {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TaskTextEdit {
+pub struct TextEdit {
     pub range: Range<usize>,
     pub new_text: String,
 }
+
+pub type TaskTextEdit = TextEdit;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskStatusEdit {
@@ -544,6 +546,49 @@ pub fn tasks(text: &str) -> Vec<Task> {
     analyze(text).tasks
 }
 
+pub fn metadata_insertion_edit(
+    text: &str,
+    offset: usize,
+    path: &Path,
+    created: &str,
+) -> Option<TextEdit> {
+    if metadata_block(text).is_some() || !text.get(..offset)?.trim().is_empty() {
+        return None;
+    }
+
+    Some(TextEdit {
+        range: 0..0,
+        new_text: format!(
+            "{{.metadata}}\n``` toml\ntitle = \"{}\"\ncreated = \"{}\"\n```\n\n",
+            escape_toml_string(&default_metadata_title(path)),
+            created
+        ),
+    })
+}
+
+pub fn task_list_item_conversion_edit(
+    text: &str,
+    offset: usize,
+    created: &str,
+) -> Option<TextEdit> {
+    let (line_start, line_end) = line_bounds(text, offset)?;
+    let line = text.get(line_start..line_end)?;
+    let content = line.strip_suffix('\r').unwrap_or(line);
+    let indent = leading_indent(content);
+    let rest = &content[indent.len()..];
+    let title = rest.strip_prefix("- [ ] ")?.trim();
+    if title.is_empty() {
+        return None;
+    }
+
+    Some(TextEdit {
+        range: line_start..line_end,
+        new_text: format!(
+            "{indent}- {{created=\"{created}\"}}\n{indent}  ::: task\n{indent}  {title}\n{indent}  :::"
+        ),
+    })
+}
+
 pub fn task_status_edits_at(
     text: &str,
     offset: usize,
@@ -564,7 +609,7 @@ pub fn task_done_edits_by_id(
     text: &str,
     id: &str,
     done: &str,
-) -> Result<Vec<TaskTextEdit>, TaskEditError> {
+) -> Result<Vec<TextEdit>, TaskEditError> {
     let analysis = analyze(text);
     let task = analysis
         .tasks
@@ -585,7 +630,7 @@ pub fn task_done_edits_by_id(
 
 pub fn apply_task_text_edits(
     mut text: String,
-    mut edits: Vec<TaskTextEdit>,
+    mut edits: Vec<TextEdit>,
 ) -> Result<String, TaskEditError> {
     edits.sort_by_key(|edit| edit.range.start);
     for pair in edits.windows(2) {
@@ -1504,6 +1549,32 @@ fn ensure_block_indent(block: &str, indent: &str) -> String {
 
 fn inherited_task_source(source: &str, indent: &str) -> String {
     filter_recurring_instance_attributes(&ensure_block_indent(source, indent))
+}
+
+fn default_metadata_title(path: &Path) -> String {
+    path.file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.is_empty())
+        .unwrap_or("Untitled")
+        .to_string()
+}
+
+fn escape_toml_string(value: &str) -> String {
+    let mut escaped = String::new();
+    for c in value.chars() {
+        match c {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            c if c.is_control() => {
+                escaped.push_str(&format!("\\u{:04X}", c as u32));
+            }
+            c => escaped.push(c),
+        }
+    }
+    escaped
 }
 
 fn filter_recurring_instance_attributes(source: &str) -> String {
@@ -2983,6 +3054,38 @@ mod tests {
         assert_eq!(
             updated,
             "{#write-parser}\n{done=\"2026-06-22T09:00:00+08:00\"}\n::: task\nWrite parser.\n:::\n"
+        );
+    }
+
+    #[test]
+    fn metadata_insertion_edit_adds_leading_metadata_block() {
+        let text = "\n\n# Heading\n";
+        let edit = metadata_insertion_edit(
+            text,
+            1,
+            Path::new("/notes/my \"note\".dj"),
+            "2026-06-22T09:00:00+08:00",
+        )
+        .unwrap();
+
+        assert_eq!(edit.range, 0..0);
+        assert_eq!(
+            edit.new_text,
+            "{.metadata}\n``` toml\ntitle = \"my \\\"note\\\"\"\ncreated = \"2026-06-22T09:00:00+08:00\"\n```\n\n"
+        );
+        assert!(metadata_insertion_edit("# Heading\n", 2, Path::new("x.dj"), "now").is_none());
+    }
+
+    #[test]
+    fn task_list_item_conversion_edit_converts_open_native_task() {
+        let text = "# Tasks\n\n  - [ ] Write parser.\n";
+        let edit =
+            task_list_item_conversion_edit(text, text.find("Write").unwrap(), "created").unwrap();
+
+        assert_eq!(&text[edit.range.clone()], "  - [ ] Write parser.");
+        assert_eq!(
+            edit.new_text,
+            "  - {created=\"created\"}\n    ::: task\n    Write parser.\n    :::"
         );
     }
 
