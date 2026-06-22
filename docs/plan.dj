@@ -87,9 +87,30 @@ Current `djot-filter` usage and query context are documented in
 - [ ] Consider a shared `djot-core::Analysis` model that collects anchors,
   references, metadata, task records, and diagnostics from one document parse,
   so `djot-ls` and `djot-filter` can reuse the same analysis shape.
+- [ ] Move shared task editing semantics into `djot-core`, so LSP code actions
+  and `djot-filter` task actions use the same source-editing behavior for
+  completion, cancellation, reopening, and recurring-task advancement.
+- [ ] Split large crate entry points into focused modules as the shared
+  analysis model settles:
+
+  - `djot-ls`: completion, diagnostics, rename, code actions, and task/editor
+    affordances
+  - `djot-filter`: CEL query evaluation, task actions, interactive skim mode,
+    and table/rendering output
+
 - [ ] Defer disk-backed analysis caching until parsing shows up as a real
   bottleneck. If added, keep the cache limited to saved on-disk files and let
   `djot-ls` maintain unsaved buffer state only in memory.
+
+# Testing
+
+- [ ] Add larger workspace fixtures for cross-file semantic regressions:
+
+  - nested directories and paths with spaces / percent-encoding
+  - duplicate anchors
+  - task dependency cycles
+  - recurring task advancement
+  - file rename edits and reference updates
 
 # Future: note/task tooling
 
@@ -102,7 +123,7 @@ support.
 - [ ] Add editor/tooling affordances once the core task model exists:
 
   - [ ] hover summary for completion state, id, created datetime, done/canceled
-    datetime, and title
+    datetime, due/wait, blocked reason, dependency summary, and title
   - [ ] document symbols for tasks
   - [x] code action to add `done`
   - [x] code action to add `canceled`
@@ -186,3 +207,11 @@ Remaining work:
 - [x] code action to add a leading metadata block with `title` initialized from
   the file name and `created` initialized to the current RFC 3339 datetime
 - [ ] metadata hover needs a display form rather than the pandoc `Meta` map
+
+# Workspace integration
+
+- [ ] Track external workspace file changes after initialization, likely via
+  `workspace/didChangeWatchedFiles` plus targeted re-indexing. If this
+  advertises a new client capability, implement the corresponding
+  `LanguageServer` notification handler at the same time so async-lsp's
+  omni-trait default handler cannot terminate the server.
