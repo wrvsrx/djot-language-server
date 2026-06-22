@@ -98,6 +98,9 @@ Current `djot-filter` usage and query context are documented in
   for completion, cancellation, and recurring-task advancement.
 - [x] Move metadata insertion and native task-list conversion edit planning
   into `djot-core`; LSP code actions only wrap the byte-range edits.
+- [x] Add a generic `djot-core` edit model for document text edits and
+  workspace edit plans; rename/path-rename semantics now emit protocol-neutral
+  edits before LSP converts them to client workspace edits.
 - [ ] Split large crate entry points into focused modules as the shared
   analysis model settles:
 

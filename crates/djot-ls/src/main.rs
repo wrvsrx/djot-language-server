@@ -15,6 +15,7 @@ use djot_core::{
     heading_outline, metadata_block, metadata_insertion_edit, resolve_target,
     task_list_item_conversion_edit, task_status_edits_at, AnalysisDiagnostic, DiagnosticKind,
     Heading, PathRenameError, RefTarget, RenameTargetError, TaskStatus, Workspace,
+    WorkspaceEdit as CoreWorkspaceEdit,
 };
 use futures::future::BoxFuture;
 use jotdown::{Container, Event, Parser};
@@ -518,7 +519,9 @@ impl ServerState {
         target_id: &str,
         new_name: String,
     ) -> Result<Option<WorkspaceEdit>, ResponseError> {
-        let edits = self.workspace.rename_edits(target_path, target_id);
+        let edits = self
+            .workspace
+            .anchor_rename_edits(target_path, target_id, &new_name);
         if edits.is_empty() {
             return Ok(None);
         }
@@ -532,8 +535,8 @@ impl ServerState {
                 return Ok(None);
             };
             changes.entry(uri).or_default().push(TextEdit::new(
-                byte_range_to_lsp(&entry.text, &edit.range),
-                new_name.clone(),
+                byte_range_to_lsp(&entry.text, &edit.edit.range),
+                edit.edit.new_text,
             ));
         }
 
@@ -568,39 +571,45 @@ impl ServerState {
             return Err(rename_target_exists_error());
         }
 
-        let old_uri = Url::from_file_path(&target.old_path)
-            .ok()
-            .ok_or_else(invalid_rename_path_error)?;
-        let new_uri = Url::from_file_path(&new_path)
-            .ok()
-            .ok_or_else(invalid_rename_path_error)?;
-        let mut operations = vec![DocumentChangeOperation::Op(ResourceOp::Rename(
-            RenameFile {
-                old_uri,
-                new_uri,
-                options: Some(RenameFileOptions {
-                    overwrite: Some(false),
-                    ignore_if_exists: Some(false),
-                }),
-                annotation_id: None,
-            },
-        ))];
-
-        let mut edits_by_path: BTreeMap<PathBuf, Vec<TextEdit>> = BTreeMap::new();
-        for edit in self
+        let plan = self
             .workspace
-            .path_rename_edits(&target.old_path, &new_path)
-        {
-            let Some(entry) = self.workspace.get(&edit.source_path) else {
-                return Ok(None);
-            };
-            edits_by_path
-                .entry(edit.source_path)
-                .or_default()
-                .push(TextEdit::new(
-                    byte_range_to_lsp(&entry.text, &edit.range),
-                    edit.replacement,
-                ));
+            .path_rename_edit_plan(&target.old_path, &new_path);
+        let mut operations = Vec::new();
+        let mut edits_by_path: BTreeMap<PathBuf, Vec<TextEdit>> = BTreeMap::new();
+        for edit in plan {
+            match edit {
+                CoreWorkspaceEdit::RenameFile(edit) => {
+                    let old_uri = Url::from_file_path(&edit.old_path)
+                        .ok()
+                        .ok_or_else(invalid_rename_path_error)?;
+                    let new_uri = Url::from_file_path(&edit.new_path)
+                        .ok()
+                        .ok_or_else(invalid_rename_path_error)?;
+                    operations.push(DocumentChangeOperation::Op(ResourceOp::Rename(
+                        RenameFile {
+                            old_uri,
+                            new_uri,
+                            options: Some(RenameFileOptions {
+                                overwrite: Some(false),
+                                ignore_if_exists: Some(false),
+                            }),
+                            annotation_id: None,
+                        },
+                    )));
+                }
+                CoreWorkspaceEdit::Text(edit) => {
+                    let Some(entry) = self.workspace.get(&edit.path) else {
+                        return Ok(None);
+                    };
+                    edits_by_path
+                        .entry(edit.path)
+                        .or_default()
+                        .push(TextEdit::new(
+                            byte_range_to_lsp(&entry.text, &edit.edit.range),
+                            edit.edit.new_text,
+                        ));
+                }
+            }
         }
 
         for (path, edits) in edits_by_path {

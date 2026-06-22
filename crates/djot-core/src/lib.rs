@@ -135,11 +135,29 @@ pub struct TextEdit {
     pub new_text: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocumentTextEdit {
+    pub path: PathBuf,
+    pub edit: TextEdit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileRenameEdit {
+    pub old_path: PathBuf,
+    pub new_path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkspaceEdit {
+    Text(DocumentTextEdit),
+    RenameFile(FileRenameEdit),
+}
+
 pub type TaskTextEdit = TextEdit;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskStatusEdit {
-    pub edits: Vec<TaskTextEdit>,
+    pub edits: Vec<TextEdit>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -628,7 +646,11 @@ pub fn task_done_edits_by_id(
         .ok_or_else(|| TaskEditError::CannotBuildEdit { id: id.to_string() })
 }
 
-pub fn apply_task_text_edits(
+pub fn apply_task_text_edits(text: String, edits: Vec<TextEdit>) -> Result<String, TaskEditError> {
+    apply_text_edits(text, edits)
+}
+
+pub fn apply_text_edits(
     mut text: String,
     mut edits: Vec<TextEdit>,
 ) -> Result<String, TaskEditError> {
@@ -1084,6 +1106,27 @@ impl Workspace {
         edits
     }
 
+    /// Text edits for renaming an explicit anchor and all indexed references to
+    /// it. Scans all loaded documents, so completeness requires the caller to
+    /// have indexed the workspace first.
+    pub fn anchor_rename_edits(
+        &self,
+        path: &Path,
+        id: &str,
+        replacement: &str,
+    ) -> Vec<DocumentTextEdit> {
+        self.rename_edits(path, id)
+            .into_iter()
+            .map(|edit| DocumentTextEdit {
+                path: edit.path,
+                edit: TextEdit {
+                    range: edit.range,
+                    new_text: replacement.to_string(),
+                },
+            })
+            .collect()
+    }
+
     /// Resolve a file path link under `offset` to the indexed document it
     /// targets. Only Djot file targets can be renamed this way.
     pub fn path_rename_target_at(
@@ -1145,6 +1188,43 @@ impl Workspace {
         }
 
         edits
+    }
+
+    /// Text edits for updating all indexed links when moving a document from
+    /// `old_path` to `new_path`.
+    pub fn path_rename_text_edits(
+        &self,
+        old_path: &Path,
+        new_path: &Path,
+    ) -> Vec<DocumentTextEdit> {
+        self.path_rename_edits(old_path, new_path)
+            .into_iter()
+            .map(|edit| DocumentTextEdit {
+                path: edit.source_path,
+                edit: TextEdit {
+                    range: edit.range,
+                    new_text: edit.replacement,
+                },
+            })
+            .collect()
+    }
+
+    /// A protocol-agnostic workspace edit plan for moving a document and
+    /// updating indexed links to point at the new path. This performs no file
+    /// system checks; callers that own I/O must validate conflicts separately.
+    pub fn path_rename_edit_plan(&self, old_path: &Path, new_path: &Path) -> Vec<WorkspaceEdit> {
+        let old_path = normalize(old_path);
+        let new_path = normalize(new_path);
+        std::iter::once(WorkspaceEdit::RenameFile(FileRenameEdit {
+            old_path: old_path.clone(),
+            new_path: new_path.clone(),
+        }))
+        .chain(
+            self.path_rename_text_edits(&old_path, &new_path)
+                .into_iter()
+                .map(WorkspaceEdit::Text),
+        )
+        .collect()
     }
 
     /// Diagnostics for unresolved file and anchor references in one loaded
@@ -3228,6 +3308,41 @@ mod tests {
                 (b, "topic".to_string())
             ]
         );
+
+        let mut document_edits = ws
+            .anchor_rename_edits(&PathBuf::from("/notes/b.dj"), "topic", "renamed")
+            .into_iter()
+            .map(|edit| {
+                let text = &ws.get(&edit.path).unwrap().text;
+                (
+                    edit.path,
+                    text[edit.edit.range].to_string(),
+                    edit.edit.new_text,
+                )
+            })
+            .collect::<Vec<_>>();
+        document_edits.sort_by(|a, b| a.0.cmp(&b.0));
+
+        assert_eq!(
+            document_edits,
+            vec![
+                (
+                    PathBuf::from("/notes/a.dj"),
+                    "topic".to_string(),
+                    "renamed".to_string()
+                ),
+                (
+                    PathBuf::from("/notes/a.dj"),
+                    "topic".to_string(),
+                    "renamed".to_string()
+                ),
+                (
+                    PathBuf::from("/notes/b.dj"),
+                    "topic".to_string(),
+                    "renamed".to_string()
+                )
+            ]
+        );
     }
 
     #[test]
@@ -3304,6 +3419,47 @@ mod tests {
             vec![
                 (a, "b.dj".to_string(), "renamed.dj".to_string()),
                 (c, "../b.dj".to_string(), "../renamed.dj".to_string()),
+            ]
+        );
+
+        let plan = ws.path_rename_edit_plan(&b, &renamed);
+        assert_eq!(
+            plan.first(),
+            Some(&WorkspaceEdit::RenameFile(FileRenameEdit {
+                old_path: b,
+                new_path: renamed,
+            }))
+        );
+
+        let mut text_edits = plan
+            .into_iter()
+            .filter_map(|edit| match edit {
+                WorkspaceEdit::Text(edit) => {
+                    let text = &ws.get(&edit.path).unwrap().text;
+                    Some((
+                        edit.path,
+                        text[edit.edit.range].to_string(),
+                        edit.edit.new_text,
+                    ))
+                }
+                WorkspaceEdit::RenameFile(_) => None,
+            })
+            .collect::<Vec<_>>();
+        text_edits.sort_by(|a, b| a.0.cmp(&b.0));
+
+        assert_eq!(
+            text_edits,
+            vec![
+                (
+                    PathBuf::from("/notes/a.dj"),
+                    "b.dj".to_string(),
+                    "renamed.dj".to_string()
+                ),
+                (
+                    PathBuf::from("/notes/sub/c.dj"),
+                    "../b.dj".to_string(),
+                    "../renamed.dj".to_string()
+                ),
             ]
         );
     }
