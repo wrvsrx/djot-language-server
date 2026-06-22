@@ -3,8 +3,10 @@ use std::ffi::OsString;
 use std::ops::{ControlFlow, Range as ByteRange};
 use std::path::{Component, Path, PathBuf};
 
+mod edit_context;
 mod lsp_utils;
 
+use edit_context::EditContext;
 use lsp_utils::*;
 
 use async_lsp::client_monitor::ClientProcessMonitorLayer;
@@ -14,7 +16,6 @@ use async_lsp::router::Router;
 use async_lsp::server::LifecycleLayer;
 use async_lsp::tracing::TracingLayer;
 use async_lsp::{ClientSocket, LanguageServer, ResponseError};
-use chrono::{Local, SecondsFormat};
 use djot_core::{
     heading_outline, metadata_block, metadata_insertion_edit, resolve_target,
     task_list_item_conversion_edit, task_status_edits_at, AnalysisDiagnostic, DiagnosticKind,
@@ -530,10 +531,10 @@ impl ServerState {
             let Some(uri) = Url::from_file_path(&edit.path).ok() else {
                 return Ok(None);
             };
-            changes.entry(uri).or_default().push(TextEdit::new(
-                byte_range_to_lsp(&entry.text, &edit.edit.range),
-                edit.edit.new_text,
-            ));
+            changes
+                .entry(uri)
+                .or_default()
+                .push(EditContext::lsp_text_edit(&entry.text, edit.edit));
         }
 
         Ok(Some(WorkspaceEdit::new(changes)))
@@ -600,10 +601,7 @@ impl ServerState {
                     edits_by_path
                         .entry(edit.path)
                         .or_default()
-                        .push(TextEdit::new(
-                            byte_range_to_lsp(&entry.text, &edit.edit.range),
-                            edit.edit.new_text,
-                        ));
+                        .push(EditContext::lsp_text_edit(&entry.text, edit.edit));
                 }
             }
         }
@@ -791,6 +789,7 @@ impl ServerState {
         let path = params.text_document.uri.to_file_path().ok()?;
         let entry = self.workspace.get(&path)?;
         let offset = position_to_offset(&entry.text, params.range.start);
+        let edit_context = EditContext::now();
         let mut actions = Vec::new();
 
         if requested_code_action_kind_matches(
@@ -798,13 +797,13 @@ impl ServerState {
             &CodeActionKind::REFACTOR_REWRITE,
         ) {
             if let Some(insertion) =
-                metadata_insertion_edit(&entry.text, offset, &path, &created_timestamp())
+                metadata_insertion_edit(&entry.text, offset, &path, edit_context.timestamp())
             {
-                let range = byte_range_to_lsp(&entry.text, &insertion.range);
-                let edit = WorkspaceEdit::new(HashMap::from([(
+                let edit = EditContext::single_document_workspace_edit(
                     params.text_document.uri.clone(),
-                    vec![TextEdit::new(range, insertion.new_text)],
-                )]));
+                    &entry.text,
+                    vec![insertion],
+                );
                 actions.push(CodeActionOrCommand::CodeAction(CodeAction {
                     title: "Add metadata".to_string(),
                     kind: Some(CodeActionKind::REFACTOR_REWRITE),
@@ -818,13 +817,13 @@ impl ServerState {
             }
 
             if let Some(conversion) =
-                task_list_item_conversion_edit(&entry.text, offset, &created_timestamp())
+                task_list_item_conversion_edit(&entry.text, offset, edit_context.timestamp())
             {
-                let range = byte_range_to_lsp(&entry.text, &conversion.range);
-                let edit = WorkspaceEdit::new(HashMap::from([(
+                let edit = EditContext::single_document_workspace_edit(
                     params.text_document.uri.clone(),
-                    vec![TextEdit::new(range, conversion.new_text)],
-                )]));
+                    &entry.text,
+                    vec![conversion],
+                );
                 actions.push(CodeActionOrCommand::CodeAction(CodeAction {
                     title: "Convert to task div".to_string(),
                     kind: Some(CodeActionKind::REFACTOR_REWRITE),
@@ -842,7 +841,6 @@ impl ServerState {
             params.context.only.as_deref(),
             &CodeActionKind::QUICKFIX,
         ) {
-            let timestamp = created_timestamp();
             let task_is_blocked = entry
                 .analysis
                 .tasks
@@ -855,23 +853,17 @@ impl ServerState {
                 })
                 .is_some_and(|task| self.workspace.is_task_blocked(&path, &task));
             if !task_is_blocked {
-                if let Some(completion) =
-                    task_status_edits_at(&entry.text, offset, TaskStatus::Done, &timestamp)
-                {
-                    let edits = completion
-                        .edits
-                        .into_iter()
-                        .map(|edit| {
-                            TextEdit::new(
-                                byte_range_to_lsp(&entry.text, &edit.range),
-                                edit.new_text,
-                            )
-                        })
-                        .collect();
-                    let edit = WorkspaceEdit::new(HashMap::from([(
+                if let Some(completion) = task_status_edits_at(
+                    &entry.text,
+                    offset,
+                    TaskStatus::Done,
+                    edit_context.timestamp(),
+                ) {
+                    let edit = EditContext::single_document_workspace_edit(
                         params.text_document.uri.clone(),
-                        edits,
-                    )]));
+                        &entry.text,
+                        completion.edits,
+                    );
                     actions.push(CodeActionOrCommand::CodeAction(CodeAction {
                         title: "Complete task".to_string(),
                         kind: Some(CodeActionKind::QUICKFIX),
@@ -885,18 +877,17 @@ impl ServerState {
                 }
             }
 
-            if let Some(cancellation) =
-                task_status_edits_at(&entry.text, offset, TaskStatus::Canceled, &timestamp)
-            {
-                let edits = cancellation
-                    .edits
-                    .into_iter()
-                    .map(|edit| {
-                        TextEdit::new(byte_range_to_lsp(&entry.text, &edit.range), edit.new_text)
-                    })
-                    .collect();
-                let edit =
-                    WorkspaceEdit::new(HashMap::from([(params.text_document.uri.clone(), edits)]));
+            if let Some(cancellation) = task_status_edits_at(
+                &entry.text,
+                offset,
+                TaskStatus::Canceled,
+                edit_context.timestamp(),
+            ) {
+                let edit = EditContext::single_document_workspace_edit(
+                    params.text_document.uri.clone(),
+                    &entry.text,
+                    cancellation.edits,
+                );
                 actions.push(CodeActionOrCommand::CodeAction(CodeAction {
                     title: "Cancel task".to_string(),
                     kind: Some(CodeActionKind::QUICKFIX),
@@ -1188,10 +1179,6 @@ fn code_action_kind_includes(requested: &CodeActionKind, action_kind: &CodeActio
         || action_kind
             .strip_prefix(requested)
             .is_some_and(|suffix| suffix.starts_with('.'))
-}
-
-fn created_timestamp() -> String {
-    Local::now().to_rfc3339_opts(SecondsFormat::Secs, false)
 }
 
 fn str_event_touching_cursor(text: &str, offset: usize) -> Option<ByteRange<usize>> {
