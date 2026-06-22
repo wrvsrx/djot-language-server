@@ -5,7 +5,7 @@
 //! that need editor coordinates (LSP UTF-16 positions) or a particular AST
 //! (pandoc) convert at their own boundary — this crate never depends on those.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::ops::Range;
 use std::path::{Component, Path, PathBuf};
@@ -70,6 +70,7 @@ pub struct Reference {
 pub enum ReferenceKind {
     Link,
     TaskPrev,
+    TaskDependency,
 }
 
 /// The resolved destination of a link. jotdown hands us a single destination
@@ -106,6 +107,27 @@ pub struct Task {
     pub wait: Option<String>,
     pub recur: Option<String>,
     pub prev: Option<String>,
+    pub depends: Vec<TaskDependency>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskDependency {
+    pub source: String,
+    pub range: Range<usize>,
+    pub target: RefTarget,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TaskRef {
+    pub path: PathBuf,
+    pub id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedTaskDependency {
+    pub source: String,
+    pub target: TaskRef,
+    pub task: Task,
 }
 
 /// Protocol-agnostic diagnostics produced by djot analysis.
@@ -134,6 +156,18 @@ pub enum DiagnosticKind {
     ConflictingTaskClosedState,
     InvalidTaskPrevTarget {
         id: String,
+    },
+    InvalidTaskDependencyTarget {
+        target: String,
+    },
+    TaskSelfDependency {
+        target: String,
+    },
+    TaskDependencyCycle {
+        id: String,
+    },
+    TaskBlocked {
+        count: usize,
     },
 }
 
@@ -279,6 +313,7 @@ pub fn build_index(text: &str) -> DocIndex {
                         if let Some(reference) = task_prev_reference(text, &span, &attrs) {
                             references.push(reference);
                         }
+                        references.extend(task_dependency_references(text, &span, &attrs));
                     }
                 }
                 if let Container::Link(dst, _) = container {
@@ -368,11 +403,12 @@ pub fn tasks(text: &str) -> Vec<Task> {
     for (event, span) in Parser::new(text).into_offset_iter() {
         match event {
             Event::Start(Container::ListItem | Container::TaskListItem { .. }, attrs) => {
-                list_item_metadata.push(TaskMetadata::from_attributes(&attrs));
+                list_item_metadata.push(TaskMetadata::from_attributes(text, &span, &attrs));
             }
             Event::Start(Container::Div { class }, attrs) if class == TASK_CLASS => {
                 let inherited = list_item_metadata.last();
-                let metadata = TaskMetadata::from_attributes_with_fallback(&attrs, inherited);
+                let metadata =
+                    TaskMetadata::from_attributes_with_fallback(text, &span, &attrs, inherited);
                 let depth = stack.len();
                 stack.push(TaskFrame {
                     range_start: span.start,
@@ -385,6 +421,7 @@ pub fn tasks(text: &str) -> Vec<Task> {
                     wait: metadata.wait,
                     recur: metadata.recur,
                     prev: metadata.prev,
+                    depends: metadata.depends,
                     capturing_title: false,
                     captured_title: false,
                     title_range: None,
@@ -590,6 +627,76 @@ impl Workspace {
         out
     }
 
+    pub fn task_by_id(&self, path: &Path, id: &str) -> Option<Task> {
+        let entry = self.get(path)?;
+        tasks(&entry.text)
+            .into_iter()
+            .find(|task| task.id.as_deref() == Some(id))
+    }
+
+    pub fn task_dependencies(&self, path: &Path, task: &Task) -> Vec<ResolvedTaskDependency> {
+        let source_path = normalize(path);
+        task.depends
+            .iter()
+            .filter_map(|dependency| {
+                let target = self.resolve_task_dependency(&source_path, dependency)?;
+                let task = self.task_by_id(&target.path, &target.id)?;
+                Some(ResolvedTaskDependency {
+                    source: dependency.source.clone(),
+                    target,
+                    task,
+                })
+            })
+            .collect()
+    }
+
+    pub fn open_task_dependencies(&self, path: &Path, task: &Task) -> Vec<ResolvedTaskDependency> {
+        self.task_dependencies(path, task)
+            .into_iter()
+            .filter(|dependency| {
+                dependency.task.done.is_none() && dependency.task.canceled.is_none()
+            })
+            .collect()
+    }
+
+    pub fn is_task_blocked(&self, path: &Path, task: &Task) -> bool {
+        !self.open_task_dependencies(path, task).is_empty()
+    }
+
+    pub fn directly_blocking_tasks(&self, path: &Path, id: &str) -> Vec<TaskRef> {
+        let target = TaskRef {
+            path: normalize(path),
+            id: id.to_string(),
+        };
+        let mut blocking = Vec::new();
+        for (source_path, entry) in &self.docs {
+            for task in tasks(&entry.text) {
+                let Some(source_id) = &task.id else {
+                    continue;
+                };
+                if task.depends.iter().any(|dependency| {
+                    self.resolve_task_dependency(source_path, dependency)
+                        .is_some_and(|dependency_target| dependency_target == target)
+                }) {
+                    blocking.push(TaskRef {
+                        path: source_path.clone(),
+                        id: source_id.clone(),
+                    });
+                }
+            }
+        }
+        blocking.sort_by(|a, b| (&a.path, &a.id).cmp(&(&b.path, &b.id)));
+        blocking
+    }
+
+    fn resolve_task_dependency(&self, from: &Path, dependency: &TaskDependency) -> Option<TaskRef> {
+        let target = resolve_target(from, &dependency.target)?;
+        Some(TaskRef {
+            path: target.path,
+            id: target.id?,
+        })
+    }
+
     /// Resolve the anchor symbol under `offset`, either from the anchor
     /// declaration itself or from an editable link target that points to it.
     pub fn rename_target_at(
@@ -758,6 +865,9 @@ impl Workspace {
         diagnostics.extend(duplicate_anchor_diagnostics(&entry.text));
 
         for reference in &entry.index.references {
+            if reference.kind == ReferenceKind::TaskDependency {
+                continue;
+            }
             if !is_diagnostic_target(&reference.target) {
                 continue;
             }
@@ -825,8 +935,164 @@ impl Workspace {
             }
         }
 
+        diagnostics.extend(self.task_dependency_diagnostics(path, entry));
+
         diagnostics
     }
+
+    fn task_dependency_diagnostics(
+        &self,
+        path: &Path,
+        entry: &DocEntry,
+    ) -> Vec<AnalysisDiagnostic> {
+        let path = normalize(path);
+        let graph = self.task_dependency_graph();
+        let mut diagnostics = Vec::new();
+
+        for task in tasks(&entry.text) {
+            let task_ref = task.id.as_ref().map(|id| TaskRef {
+                path: path.clone(),
+                id: id.clone(),
+            });
+
+            for dependency in &task.depends {
+                if let Some(diagnostic) = self.invalid_task_dependency_diagnostic(&path, dependency)
+                {
+                    diagnostics.push(diagnostic);
+                    continue;
+                }
+
+                if let Some(target) = self.resolve_task_dependency(&path, dependency) {
+                    if task_ref.as_ref() == Some(&target) {
+                        diagnostics.push(AnalysisDiagnostic {
+                            range: dependency.range.clone(),
+                            kind: DiagnosticKind::TaskSelfDependency {
+                                target: dependency.source.clone(),
+                            },
+                        });
+                    }
+                }
+            }
+
+            if let Some(task_ref) = task_ref {
+                if has_dependency_cycle(&graph, &task_ref) {
+                    diagnostics.push(AnalysisDiagnostic {
+                        range: task.range.clone(),
+                        kind: DiagnosticKind::TaskDependencyCycle { id: task_ref.id },
+                    });
+                }
+            }
+
+            if task.done.is_none() && task.canceled.is_none() {
+                let blockers = self.open_task_dependencies(&path, &task);
+                if !blockers.is_empty() {
+                    diagnostics.push(AnalysisDiagnostic {
+                        range: task
+                            .title_range
+                            .clone()
+                            .unwrap_or_else(|| task.range.clone()),
+                        kind: DiagnosticKind::TaskBlocked {
+                            count: blockers.len(),
+                        },
+                    });
+                }
+            }
+        }
+
+        diagnostics
+    }
+
+    fn invalid_task_dependency_diagnostic(
+        &self,
+        path: &Path,
+        dependency: &TaskDependency,
+    ) -> Option<AnalysisDiagnostic> {
+        if !is_diagnostic_target(&dependency.target) {
+            return None;
+        }
+
+        let target = resolve_target(path, &dependency.target)?;
+        let Some(target_entry) = self.get(&target.path) else {
+            if let RefTarget::External { path, .. } = &dependency.target {
+                return Some(AnalysisDiagnostic {
+                    range: dependency.range.clone(),
+                    kind: DiagnosticKind::UnresolvedPath { path: path.clone() },
+                });
+            }
+            return None;
+        };
+
+        let Some(id) = target.id else {
+            return None;
+        };
+        let Some(anchor) = target_entry.index.anchors.get(&id) else {
+            return Some(AnalysisDiagnostic {
+                range: dependency.range.clone(),
+                kind: DiagnosticKind::UnresolvedAnchor { id },
+            });
+        };
+
+        if !anchor_targets_task(&target_entry.text, &anchor.range) {
+            return Some(AnalysisDiagnostic {
+                range: dependency.range.clone(),
+                kind: DiagnosticKind::InvalidTaskDependencyTarget {
+                    target: dependency.source.clone(),
+                },
+            });
+        }
+
+        None
+    }
+
+    fn task_dependency_graph(&self) -> HashMap<TaskRef, Vec<TaskRef>> {
+        let mut graph: HashMap<TaskRef, Vec<TaskRef>> = HashMap::new();
+        for (path, entry) in &self.docs {
+            for task in tasks(&entry.text) {
+                let Some(id) = &task.id else {
+                    continue;
+                };
+                let source = TaskRef {
+                    path: path.clone(),
+                    id: id.clone(),
+                };
+                let edges = task
+                    .depends
+                    .iter()
+                    .filter_map(|dependency| {
+                        let target = self.resolve_task_dependency(path, dependency)?;
+                        self.task_by_id(&target.path, &target.id).map(|_| target)
+                    })
+                    .collect::<Vec<_>>();
+                graph.insert(source, edges);
+            }
+        }
+        graph
+    }
+}
+
+fn has_dependency_cycle(graph: &HashMap<TaskRef, Vec<TaskRef>>, start: &TaskRef) -> bool {
+    fn visit(
+        graph: &HashMap<TaskRef, Vec<TaskRef>>,
+        start: &TaskRef,
+        current: &TaskRef,
+        seen: &mut HashSet<TaskRef>,
+    ) -> bool {
+        let Some(edges) = graph.get(current) else {
+            return false;
+        };
+        for next in edges {
+            if next == start {
+                return true;
+            }
+            if seen.insert(next.clone()) && visit(graph, start, next, seen) {
+                return true;
+            }
+        }
+        false
+    }
+
+    let mut seen = HashSet::new();
+    visit(graph, start, start, &mut seen)
 }
 
 fn anchor_targets_task(text: &str, anchor_range: &Range<usize>) -> bool {
@@ -1206,6 +1472,146 @@ fn task_prev_reference(text: &str, span: &Range<usize>, attrs: &Attributes) -> O
     })
 }
 
+fn task_dependency_references(
+    text: &str,
+    span: &Range<usize>,
+    attrs: &Attributes,
+) -> Vec<Reference> {
+    task_dependencies(text, span, attrs)
+        .into_iter()
+        .map(|dependency| Reference {
+            target_path_range: dependency_target_path_range(&dependency),
+            target_id_range: dependency_target_id_range(&dependency),
+            source: dependency.range,
+            target: dependency.target,
+            kind: ReferenceKind::TaskDependency,
+        })
+        .collect()
+}
+
+fn task_dependencies(text: &str, span: &Range<usize>, attrs: &Attributes) -> Vec<TaskDependency> {
+    let Some(depends) = attrs.get_value("depends").map(|value| value.to_string()) else {
+        return Vec::new();
+    };
+    let Some(value_range) = attribute_value_range(text, span, "depends", &depends) else {
+        return Vec::new();
+    };
+    dependency_tokens(&depends)
+        .into_iter()
+        .map(|(source, relative_range)| TaskDependency {
+            target: parse_dependency_target(source),
+            source: source.to_string(),
+            range: value_range.start + relative_range.start..value_range.start + relative_range.end,
+        })
+        .collect()
+}
+
+fn dependency_tokens(source: &str) -> Vec<(&str, Range<usize>)> {
+    let mut tokens = Vec::new();
+    let mut cursor = 0;
+    while cursor < source.len() {
+        while source
+            .as_bytes()
+            .get(cursor)
+            .is_some_and(|byte| byte.is_ascii_whitespace())
+        {
+            cursor += 1;
+        }
+        let start = cursor;
+        while source
+            .as_bytes()
+            .get(cursor)
+            .is_some_and(|byte| !byte.is_ascii_whitespace())
+        {
+            cursor += 1;
+        }
+        if start < cursor {
+            tokens.push((&source[start..cursor], start..cursor));
+        }
+    }
+    tokens
+}
+
+fn parse_dependency_target(source: &str) -> RefTarget {
+    if let Some(id) = source.strip_prefix('#') {
+        RefTarget::Internal { id: id.to_string() }
+    } else if let Some((path, id)) = source.split_once('#') {
+        RefTarget::External {
+            path: percent_decode_path(path),
+            id: Some(id.to_string()),
+        }
+    } else {
+        RefTarget::Internal {
+            id: source.to_string(),
+        }
+    }
+}
+
+fn dependency_target_path_range(dependency: &TaskDependency) -> Option<Range<usize>> {
+    match &dependency.target {
+        RefTarget::External { .. } => {
+            let source = dependency.source.as_str();
+            let hash = source.find('#')?;
+            if hash == 0 {
+                None
+            } else {
+                Some(dependency.range.start..dependency.range.start + hash)
+            }
+        }
+        RefTarget::Internal { .. } | RefTarget::Url(_) => None,
+    }
+}
+
+fn dependency_target_id_range(dependency: &TaskDependency) -> Option<Range<usize>> {
+    match &dependency.target {
+        RefTarget::Internal { .. } => {
+            let start = dependency.range.start
+                + dependency
+                    .source
+                    .strip_prefix('#')
+                    .map_or(0, |_| '#'.len_utf8());
+            Some(start..dependency.range.end)
+        }
+        RefTarget::External { .. } => {
+            let hash = dependency.source.find('#')?;
+            let start = dependency.range.start + hash + '#'.len_utf8();
+            Some(start..dependency.range.end)
+        }
+        RefTarget::Url(_) => None,
+    }
+}
+
+fn percent_decode_path(path: &str) -> String {
+    let mut decoded = Vec::with_capacity(path.len());
+    let bytes = path.as_bytes();
+    let mut cursor = 0;
+    while cursor < bytes.len() {
+        if bytes[cursor] == b'%' && cursor + 2 < bytes.len() {
+            if let Some(byte) = hex_byte(bytes[cursor + 1], bytes[cursor + 2]) {
+                decoded.push(byte);
+                cursor += 3;
+                continue;
+            }
+        }
+        decoded.push(bytes[cursor]);
+        cursor += 1;
+    }
+    String::from_utf8(decoded).unwrap_or_else(|_| path.to_string())
+}
+
+fn hex_byte(high: u8, low: u8) -> Option<u8> {
+    Some(hex_digit(high)? * 16 + hex_digit(low)?)
+}
+
+fn hex_digit(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
 fn attribute_value_range(
     text: &str,
     range: &Range<usize>,
@@ -1406,6 +1812,7 @@ struct TaskFrame {
     wait: Option<String>,
     recur: Option<String>,
     prev: Option<String>,
+    depends: Vec<TaskDependency>,
     capturing_title: bool,
     captured_title: bool,
     title_range: Option<Range<usize>>,
@@ -1422,10 +1829,11 @@ struct TaskMetadata {
     wait: Option<String>,
     recur: Option<String>,
     prev: Option<String>,
+    depends: Vec<TaskDependency>,
 }
 
 impl TaskMetadata {
-    fn from_attributes(attrs: &Attributes) -> Self {
+    fn from_attributes(text: &str, span: &Range<usize>, attrs: &Attributes) -> Self {
         Self {
             id: string_attribute(attrs, "id"),
             created: datetime_attribute(attrs, "created"),
@@ -1435,11 +1843,17 @@ impl TaskMetadata {
             wait: datetime_attribute(attrs, "wait"),
             recur: string_attribute(attrs, "recur"),
             prev: string_attribute(attrs, "prev"),
+            depends: task_dependencies(text, span, attrs),
         }
     }
 
-    fn from_attributes_with_fallback(attrs: &Attributes, fallback: Option<&Self>) -> Self {
-        let own = Self::from_attributes(attrs);
+    fn from_attributes_with_fallback(
+        text: &str,
+        span: &Range<usize>,
+        attrs: &Attributes,
+        fallback: Option<&Self>,
+    ) -> Self {
+        let own = Self::from_attributes(text, span, attrs);
         Self {
             id: match attrs.get_value("id") {
                 Some(_) => own.id,
@@ -1489,6 +1903,18 @@ impl TaskMetadata {
                     .prev
                     .or_else(|| fallback.and_then(|metadata| metadata.prev.clone())),
             },
+            depends: match attrs.get_value("depends") {
+                Some(_) => own.depends,
+                None => {
+                    if own.depends.is_empty() {
+                        fallback
+                            .map(|metadata| metadata.depends.clone())
+                            .unwrap_or_default()
+                    } else {
+                        own.depends
+                    }
+                }
+            },
         }
     }
 }
@@ -1508,6 +1934,7 @@ impl TaskFrame {
             wait: self.wait,
             recur: self.recur,
             prev: self.prev,
+            depends: self.depends,
         }
     }
 }
@@ -1767,6 +2194,51 @@ mod tests {
                 ("Grandchild.", 2),
                 ("Sibling.", 0)
             ]
+        );
+    }
+
+    #[test]
+    fn tasks_extract_dependency_tokens() {
+        let text =
+            "{depends=\"draft #review other%20file.dj#publish\"}\n::: task\nBlocked task.\n:::\n";
+        let found = tasks(text);
+
+        assert_eq!(found.len(), 1);
+        assert_eq!(
+            found[0]
+                .depends
+                .iter()
+                .map(|dependency| (dependency.source.as_str(), &dependency.target))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    "draft",
+                    &RefTarget::Internal {
+                        id: "draft".to_string()
+                    }
+                ),
+                (
+                    "#review",
+                    &RefTarget::Internal {
+                        id: "review".to_string()
+                    }
+                ),
+                (
+                    "other%20file.dj#publish",
+                    &RefTarget::External {
+                        path: "other file.dj".to_string(),
+                        id: Some("publish".to_string())
+                    }
+                ),
+            ]
+        );
+        assert_eq!(
+            found[0]
+                .depends
+                .iter()
+                .map(|dependency| text[dependency.range.clone()].to_string())
+                .collect::<Vec<_>>(),
+            vec!["draft", "#review", "other%20file.dj#publish"]
         );
     }
 
@@ -2102,6 +2574,93 @@ mod tests {
         ws.insert(path.clone(), doc.to_string());
 
         assert_eq!(ws.diagnostics_for(&path), Vec::new());
+    }
+
+    #[test]
+    fn workspace_resolves_task_dependencies_and_blocked_state() {
+        let a = PathBuf::from("/notes/a.dj");
+        let b = PathBuf::from("/notes/b.dj");
+        let doc_a = "{#draft}\n::: task\nDraft.\n:::\n\n{#done done=\"2026-06-21T09:00:00Z\"}\n::: task\nDone.\n:::\n\n{#blocked depends=\"draft b.dj#review\"}\n::: task\nBlocked.\n:::\n\n{#ready depends=\"done\"}\n::: task\nReady.\n:::\n";
+        let doc_b = "{#review}\n::: task\nReview.\n:::\n";
+        let mut ws = Workspace::new();
+        ws.insert(a.clone(), doc_a.to_string());
+        ws.insert(b.clone(), doc_b.to_string());
+
+        let blocked = ws.task_by_id(&a, "blocked").unwrap();
+        let ready = ws.task_by_id(&a, "ready").unwrap();
+        assert_eq!(
+            ws.open_task_dependencies(&a, &blocked)
+                .into_iter()
+                .map(|dependency| dependency.target)
+                .collect::<Vec<_>>(),
+            vec![
+                TaskRef {
+                    path: a.clone(),
+                    id: "draft".to_string(),
+                },
+                TaskRef {
+                    path: b.clone(),
+                    id: "review".to_string(),
+                },
+            ]
+        );
+        assert!(ws.is_task_blocked(&a, &blocked));
+        assert!(!ws.is_task_blocked(&a, &ready));
+        assert_eq!(
+            ws.directly_blocking_tasks(&a, "draft"),
+            vec![TaskRef {
+                path: a.clone(),
+                id: "blocked".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn workspace_reports_invalid_task_dependencies() {
+        let path = PathBuf::from("/notes/tasks.dj");
+        let doc = "{#note}\nNot a task.\n\n{#missing-depends depends=\"missing\"}\n::: task\nMissing.\n:::\n\n{#non-task-depends depends=\"#note\"}\n::: task\nNon task.\n:::\n\n{#self-depends depends=\"self-depends\"}\n::: task\nSelf.\n:::\n";
+        let mut ws = Workspace::new();
+        ws.insert(path.clone(), doc.to_string());
+
+        let diagnostics = ws.diagnostics_for(&path);
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.kind
+                == DiagnosticKind::UnresolvedAnchor {
+                    id: "missing".to_string(),
+                }
+        }));
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.kind
+                == DiagnosticKind::InvalidTaskDependencyTarget {
+                    target: "#note".to_string(),
+                }
+        }));
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.kind
+                == DiagnosticKind::TaskSelfDependency {
+                    target: "self-depends".to_string(),
+                }
+        }));
+    }
+
+    #[test]
+    fn workspace_reports_dependency_cycles_and_blocked_tasks() {
+        let path = PathBuf::from("/notes/tasks.dj");
+        let doc =
+            "{#a depends=\"b\"}\n::: task\nA.\n:::\n\n{#b depends=\"a\"}\n::: task\nB.\n:::\n";
+        let mut ws = Workspace::new();
+        ws.insert(path.clone(), doc.to_string());
+
+        let diagnostics = ws.diagnostics_for(&path);
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.kind == DiagnosticKind::TaskDependencyCycle { id: "a".into() }
+        }));
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.kind == DiagnosticKind::TaskDependencyCycle { id: "b".into() }
+        }));
+        assert!(diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.kind == DiagnosticKind::TaskBlocked { count: 1 } }));
     }
 
     #[test]
