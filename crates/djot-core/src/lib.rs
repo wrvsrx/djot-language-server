@@ -572,10 +572,6 @@ pub fn task_done_edits_by_id(
         .ok_or_else(|| TaskEditError::CannotBuildEdit { id: id.to_string() })
 }
 
-pub fn apply_task_text_edits(text: String, edits: Vec<TextEdit>) -> Result<String, EditError> {
-    apply_text_edits(text, edits)
-}
-
 fn task_status_edits_for_task(
     text: &str,
     task: &Task,
@@ -3012,7 +3008,7 @@ mod tests {
         let text = "{#write-parser}\n::: task\nWrite parser.\n:::\n";
         let edits =
             task_done_edits_by_id(text, "write-parser", "2026-06-22T09:00:00+08:00").unwrap();
-        let updated = apply_task_text_edits(text.to_string(), edits).unwrap();
+        let updated = apply_text_edits(text.to_string(), edits).unwrap();
 
         assert_eq!(
             updated,
