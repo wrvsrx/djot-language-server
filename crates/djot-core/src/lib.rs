@@ -135,8 +135,6 @@ pub struct TaskDependency {
     pub target: RefTarget,
 }
 
-pub type TaskTextEdit = TextEdit;
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskStatusEdit {
     pub edits: Vec<TextEdit>,
@@ -198,12 +196,6 @@ pub struct RenameTarget {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RenameEdit {
-    pub path: PathBuf,
-    pub range: Range<usize>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RenameTargetError {
     NotRenameable,
     ImplicitHeadingAnchor,
@@ -213,13 +205,6 @@ pub enum RenameTargetError {
 pub struct PathRenameTarget {
     pub old_path: PathBuf,
     pub range: Range<usize>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PathRenameEdit {
-    pub source_path: PathBuf,
-    pub range: Range<usize>,
-    pub replacement: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -614,7 +599,7 @@ fn simple_task_status_edits(
     let attribute = status.attribute();
     let opening = task_opening_fence(text, &task.range)?;
     Some(TaskStatusEdit {
-        edits: vec![TaskTextEdit {
+        edits: vec![TextEdit {
             range: opening.attribute_insert.clone(),
             new_text: format!(
                 "{}{{{attribute}=\"{timestamp}\"}}\n{}",
@@ -681,14 +666,14 @@ fn recurring_task_status_edits(
     ));
 
     let next_edit = match list_item {
-        Some(context) => TaskTextEdit {
+        Some(context) => TextEdit {
             range: context.insert..context.insert,
             new_text: format!(
                 "\n{list_indent}- {next_id_attribute}\n{indent}{{created=\"{timestamp}\" due=\"{next_due_text}\"{next_wait_attribute} recur=\"{recur}\" prev=\"#{current_id_text}\"}}\n{div}",
                 list_indent = context.list_indent,
             ),
         },
-        None => TaskTextEdit {
+        None => TextEdit {
             range: next_insert..next_insert,
             new_text: format!(
                 "\n\n{indent}{next_id_attribute}\n{indent}{{created=\"{timestamp}\" due=\"{next_due_text}\"{next_wait_attribute} recur=\"{recur}\" prev=\"#{current_id_text}\"}}\n{div}"
@@ -698,7 +683,7 @@ fn recurring_task_status_edits(
 
     Some(TaskStatusEdit {
         edits: vec![
-            TaskTextEdit {
+            TextEdit {
                 range: opening.attribute_insert,
                 new_text: status_text,
             },
@@ -989,10 +974,15 @@ impl Workspace {
             .map(|(id, anchor)| (id.as_str(), anchor))
     }
 
-    /// Every editable source range that should be replaced when renaming the
-    /// anchor `(path, id)`. Scans all loaded documents, so completeness requires
-    /// the caller to have indexed the workspace first.
-    pub fn rename_edits(&self, path: &Path, id: &str) -> Vec<RenameEdit> {
+    /// Text edits for renaming an explicit anchor and all indexed references to
+    /// it. Scans all loaded documents, so completeness requires the caller to
+    /// have indexed the workspace first.
+    pub fn anchor_rename_edits(
+        &self,
+        path: &Path,
+        id: &str,
+        replacement: &str,
+    ) -> Vec<DocumentTextEdit> {
         let target = normalize(path);
         let mut edits = Vec::new();
 
@@ -1000,9 +990,12 @@ impl Workspace {
             if !anchor.explicit {
                 return Vec::new();
             }
-            edits.push(RenameEdit {
+            edits.push(DocumentTextEdit {
                 path: target.clone(),
-                range: anchor.rename_range.clone(),
+                edit: TextEdit {
+                    range: anchor.rename_range.clone(),
+                    new_text: replacement.to_string(),
+                },
             });
         } else {
             return Vec::new();
@@ -1017,36 +1010,18 @@ impl Workspace {
                     continue;
                 };
                 if resolved.path == target && resolved.id.as_deref() == Some(id) {
-                    edits.push(RenameEdit {
+                    edits.push(DocumentTextEdit {
                         path: src.clone(),
-                        range: range.clone(),
+                        edit: TextEdit {
+                            range: range.clone(),
+                            new_text: replacement.to_string(),
+                        },
                     });
                 }
             }
         }
 
         edits
-    }
-
-    /// Text edits for renaming an explicit anchor and all indexed references to
-    /// it. Scans all loaded documents, so completeness requires the caller to
-    /// have indexed the workspace first.
-    pub fn anchor_rename_edits(
-        &self,
-        path: &Path,
-        id: &str,
-        replacement: &str,
-    ) -> Vec<DocumentTextEdit> {
-        self.rename_edits(path, id)
-            .into_iter()
-            .map(|edit| DocumentTextEdit {
-                path: edit.path,
-                edit: TextEdit {
-                    range: edit.range,
-                    new_text: replacement.to_string(),
-                },
-            })
-            .collect()
     }
 
     /// Resolve a file path link under `offset` to the indexed document it
@@ -1083,10 +1058,13 @@ impl Workspace {
         })
     }
 
-    /// Every link path range that should be replaced when moving a document
-    /// from `old_path` to `new_path`. The anchor fragment, if any, is preserved
-    /// because only the path range is edited.
-    pub fn path_rename_edits(&self, old_path: &Path, new_path: &Path) -> Vec<PathRenameEdit> {
+    /// Text edits for updating all indexed links when moving a document from
+    /// `old_path` to `new_path`.
+    pub fn path_rename_text_edits(
+        &self,
+        old_path: &Path,
+        new_path: &Path,
+    ) -> Vec<DocumentTextEdit> {
         let old_path = normalize(old_path);
         let new_path = normalize(new_path);
         let mut edits = Vec::new();
@@ -1100,35 +1078,18 @@ impl Workspace {
                     continue;
                 };
                 if resolved.path == old_path {
-                    edits.push(PathRenameEdit {
-                        source_path: src.clone(),
-                        range: range.clone(),
-                        replacement: relative_link_path(src, &new_path),
+                    edits.push(DocumentTextEdit {
+                        path: src.clone(),
+                        edit: TextEdit {
+                            range: range.clone(),
+                            new_text: relative_link_path(src, &new_path),
+                        },
                     });
                 }
             }
         }
 
         edits
-    }
-
-    /// Text edits for updating all indexed links when moving a document from
-    /// `old_path` to `new_path`.
-    pub fn path_rename_text_edits(
-        &self,
-        old_path: &Path,
-        new_path: &Path,
-    ) -> Vec<DocumentTextEdit> {
-        self.path_rename_edits(old_path, new_path)
-            .into_iter()
-            .map(|edit| DocumentTextEdit {
-                path: edit.source_path,
-                edit: TextEdit {
-                    range: edit.range,
-                    new_text: edit.replacement,
-                },
-            })
-            .collect()
     }
 
     /// A protocol-agnostic workspace edit plan for moving a document and
@@ -3202,7 +3163,7 @@ mod tests {
     }
 
     #[test]
-    fn workspace_collects_rename_edits() {
+    fn workspace_collects_anchor_rename_edits() {
         let a = PathBuf::from("/notes/a.dj");
         let b = PathBuf::from("/notes/b.dj");
         let doc_a =
@@ -3212,27 +3173,8 @@ mod tests {
         ws.insert(a.clone(), doc_a.to_string());
         ws.insert(b.clone(), doc_b.to_string());
 
-        let mut edits = ws
-            .rename_edits(&b, "topic")
-            .into_iter()
-            .map(|edit| {
-                let text = &ws.get(&edit.path).unwrap().text;
-                (edit.path, text[edit.range].to_string())
-            })
-            .collect::<Vec<_>>();
-        edits.sort_by(|a, b| a.0.cmp(&b.0));
-
-        assert_eq!(
-            edits,
-            vec![
-                (a.clone(), "topic".to_string()),
-                (a, "topic".to_string()),
-                (b, "topic".to_string())
-            ]
-        );
-
         let mut document_edits = ws
-            .anchor_rename_edits(&PathBuf::from("/notes/b.dj"), "topic", "renamed")
+            .anchor_rename_edits(&b, "topic", "renamed")
             .into_iter()
             .map(|edit| {
                 let text = &ws.get(&edit.path).unwrap().text;
@@ -3285,7 +3227,7 @@ mod tests {
             ws.rename_target_at(&a, doc_a.find("Topic").unwrap()),
             Err(RenameTargetError::ImplicitHeadingAnchor)
         );
-        assert!(ws.rename_edits(&b, "Topic").is_empty());
+        assert!(ws.anchor_rename_edits(&b, "Topic", "Renamed").is_empty());
     }
 
     #[test]
@@ -3310,7 +3252,7 @@ mod tests {
     }
 
     #[test]
-    fn workspace_collects_path_rename_edits_with_relative_replacements() {
+    fn workspace_collects_path_rename_edit_plan_with_relative_replacements() {
         let a = PathBuf::from("/notes/a.dj");
         let b = PathBuf::from("/notes/b.dj");
         let c = PathBuf::from("/notes/sub/c.dj");
@@ -3321,28 +3263,6 @@ mod tests {
         ws.insert(a.clone(), doc_a.to_string());
         ws.insert(b.clone(), "{#topic}\nTopic\n".to_string());
         ws.insert(c.clone(), doc_c.to_string());
-
-        let mut edits = ws
-            .path_rename_edits(&b, &renamed)
-            .into_iter()
-            .map(|edit| {
-                let text = &ws.get(&edit.source_path).unwrap().text;
-                (
-                    edit.source_path,
-                    text[edit.range].to_string(),
-                    edit.replacement,
-                )
-            })
-            .collect::<Vec<_>>();
-        edits.sort_by(|a, b| a.0.cmp(&b.0));
-
-        assert_eq!(
-            edits,
-            vec![
-                (a, "b.dj".to_string(), "renamed.dj".to_string()),
-                (c, "../b.dj".to_string(), "../renamed.dj".to_string()),
-            ]
-        );
 
         let plan = ws.path_rename_edit_plan(&b, &renamed);
         assert_eq!(
