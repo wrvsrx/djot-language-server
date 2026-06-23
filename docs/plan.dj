@@ -105,22 +105,22 @@ Current `djot-filter` usage and query context are documented in
 - [ ] Split large crate entry points into focused modules as the shared
   analysis model settles:
 
-  - [ ] `djot-core`: split workspace state and cross-document operations into
+  - [x] `djot-core`: split workspace state and cross-document operations into
     `workspace.rs`.
-  - [ ] `djot-core`: split reference target parsing, resolution, and reverse
+  - [x] `djot-core`: split reference target parsing, resolution, and reverse
     reference helpers into `references.rs`.
-  - [ ] `djot-core`: split lexical path normalization, relative link paths,
+  - [x] `djot-core`: split lexical path normalization, relative link paths,
     percent decoding, and Djot file path predicates into `paths.rs`.
-  - [ ] `djot-core`: split anchor/path rename target discovery and edit
+  - [x] `djot-core`: split anchor/path rename target discovery and edit
     planning into `rename.rs`.
-  - [ ] `djot-core`: split single-document parsing and `Analysis` construction
+  - [x] `djot-core`: split single-document parsing and `Analysis` construction
     into `analysis.rs`.
-  - [ ] `djot-filter`: split CEL query compilation/evaluation into `query.rs`.
-  - [ ] `djot-filter`: split task listing and task-editing CLI actions into
+  - [x] `djot-filter`: split CEL query compilation/evaluation into `query.rs`.
+  - [x] `djot-filter`: split task listing and task-editing CLI actions into
     `tasks.rs`.
-  - [ ] `djot-filter`: split skim item construction, preview, file creation,
+  - [x] `djot-filter`: split skim item construction, preview, file creation,
     and editor launching into `interactive.rs`.
-  - [ ] `djot-filter`: split table/output rendering into `render.rs`.
+  - [x] `djot-filter`: split table/output rendering into `render.rs`.
 
 - [ ] Defer disk-backed analysis caching until parsing shows up as a real
   bottleneck. If added, keep the cache limited to saved on-disk files and let
