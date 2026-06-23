@@ -23,7 +23,7 @@ fn initialize_advertises_task_semantic_tokens() {
 }
 
 #[test]
-fn semantic_tokens_marks_closed_task_titles() {
+fn semantic_tokens_marks_closed_task_blocks() {
     let doc = concat!(
         "::: task\n",
         "Open.\n",
@@ -56,9 +56,55 @@ fn semantic_tokens_marks_closed_task_titles() {
     assert_eq!(
         data,
         &json!([
-            6, 0, 10, 0, 1, // Done task.
-            5, 0, 9, 0, 1, // Canceled.
-            3, 6, 12, 0, 1, // Native done.
+            4, 0, 29, 0, 1, // {done=...}
+            1, 0, 8, 0, 1, // ::: task
+            1, 0, 10, 0, 1, // Done task.
+            1, 0, 3, 0, 1, // :::
+            2, 0, 33, 0, 1, // {canceled=...}
+            1, 0, 8, 0, 1, // ::: task
+            1, 0, 9, 0, 1, // Canceled.
+            1, 0, 3, 0, 1, // :::
+            2, 0, 18, 0, 1, // - [x] Native done.
+        ])
+    );
+}
+
+#[test]
+fn semantic_tokens_merges_nested_closed_task_blocks() {
+    let doc = concat!(
+        "{done=\"2026-06-24T09:00:00Z\"}\n",
+        ":::: task\n",
+        "Parent.\n",
+        "\n",
+        "{done=\"2026-06-24T09:00:00Z\"}\n",
+        "::: task\n",
+        "Child.\n",
+        ":::\n",
+        "::::\n",
+    );
+    let msgs = [
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{},"processId":null,"rootUri":null}}),
+        json!({"jsonrpc":"2.0","method":"initialized","params":{}}),
+        json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tasks.dj","languageId":"djot","version":1,"text":doc}}}),
+        json!({"jsonrpc":"2.0","id":2,"method":"textDocument/semanticTokens/full","params":{"textDocument":{"uri":"file:///tasks.dj"}}}),
+        json!({"jsonrpc":"2.0","id":3,"method":"shutdown","params":null}),
+        json!({"jsonrpc":"2.0","method":"exit","params":null}),
+    ];
+
+    let responses = run_session(&msgs);
+    let data = &response_result(&responses, 2)["data"];
+
+    assert_eq!(
+        data,
+        &json!([
+            0, 0, 29, 0, 1, // parent {done=...}
+            1, 0, 9, 0, 1, // :::: task
+            1, 0, 7, 0, 1, // Parent.
+            2, 0, 29, 0, 1, // child {done=...}
+            1, 0, 8, 0, 1, // ::: task
+            1, 0, 6, 0, 1, // Child.
+            1, 0, 3, 0, 1, // :::
+            1, 0, 4, 0, 1, // ::::
         ])
     );
 }

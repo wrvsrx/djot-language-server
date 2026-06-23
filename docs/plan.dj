@@ -56,7 +56,7 @@ drift.
 
 - [x] `textDocument/semanticTokens/full`
 
-  - [x] mark closed task titles with a custom `task` token type and
+  - [x] mark closed task blocks/items with a custom `task` token type and
     `completed` modifier
 
 - [x] `textDocument/rename`

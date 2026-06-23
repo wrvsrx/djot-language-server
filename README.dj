@@ -52,7 +52,7 @@ recurrence, previous-task reference, dependency list, and open blockers.
 
 ## `textDocument/semanticTokens/full`
 
-Marks closed task titles with semantic tokens. The server advertises a custom
+Marks closed tasks with semantic tokens. The server advertises a custom
 `task` token type and `completed` modifier for task divs with `done` or
 `canceled` metadata, and for checked native Djot task list items.
 
