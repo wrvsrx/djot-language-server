@@ -45,8 +45,18 @@ pub(crate) struct ServerState {
     pub(crate) workspace_edit_capabilities: ClientWorkspaceEditCapabilities,
     /// Client support for dynamically registering workspace file watchers.
     pub(crate) file_watch_capabilities: ClientFileWatchCapabilities,
+    /// Path renames returned optimistically before the client applies the
+    /// workspace edit and file watchers report the real file-system outcome.
+    pub(crate) pending_path_renames: Vec<PendingPathRename>,
     /// Open buffers that should receive publishDiagnostics updates.
     pub(crate) open_documents: HashSet<PathBuf>,
+}
+
+pub(crate) struct PendingPathRename {
+    old_path: PathBuf,
+    new_path: PathBuf,
+    old_removed: bool,
+    new_seen: bool,
 }
 
 impl ServerState {
@@ -57,6 +67,7 @@ impl ServerState {
             workspace_roots: Vec::new(),
             workspace_edit_capabilities: ClientWorkspaceEditCapabilities::default(),
             file_watch_capabilities: ClientFileWatchCapabilities::default(),
+            pending_path_renames: Vec::new(),
             open_documents: HashSet::new(),
         }
     }
@@ -195,6 +206,7 @@ impl LanguageServer for ServerState {
             }
             match change.typ {
                 FileChangeType::CREATED | FileChangeType::CHANGED => {
+                    self.confirm_pending_path_rename(&path);
                     if !self.open_documents.contains(&path) {
                         if let Ok(text) = std::fs::read_to_string(&path) {
                             self.workspace.insert(path, text);
@@ -202,6 +214,7 @@ impl LanguageServer for ServerState {
                     }
                 }
                 FileChangeType::DELETED => {
+                    self.confirm_pending_path_rename(&path);
                     if !self.open_documents.contains(&path) {
                         self.workspace.remove(&path);
                     }
@@ -540,11 +553,45 @@ impl ServerState {
 
         if let Some(entry) = self.workspace.get(&target.old_path) {
             let text = entry.text.clone();
-            self.workspace.insert(new_path, text);
+            self.workspace.insert(new_path.clone(), text);
             self.workspace.remove(&target.old_path);
         }
+        self.pending_path_renames.push(PendingPathRename {
+            old_path: target.old_path,
+            new_path,
+            old_removed: false,
+            new_seen: false,
+        });
 
         Ok(edit)
+    }
+
+    fn confirm_pending_path_rename(&mut self, changed_path: &Path) {
+        for rename in &mut self.pending_path_renames {
+            if changed_path == rename.old_path {
+                rename.old_removed = !rename.old_path.exists();
+                if rename.old_removed {
+                    self.workspace.remove(&rename.old_path);
+                }
+                if !rename.new_path.exists() && !self.open_documents.contains(&rename.new_path) {
+                    self.workspace.remove(&rename.new_path);
+                    rename.new_seen = false;
+                }
+            } else if changed_path == rename.new_path {
+                rename.new_seen = rename.new_path.exists();
+                if rename.new_seen {
+                    if let Ok(text) = std::fs::read_to_string(&rename.new_path) {
+                        self.workspace.insert(rename.new_path.clone(), text);
+                    }
+                } else if !self.open_documents.contains(&rename.new_path) {
+                    self.workspace.remove(&rename.new_path);
+                }
+                rename.old_removed = !rename.old_path.exists();
+            }
+        }
+
+        self.pending_path_renames
+            .retain(|rename| !(rename.old_removed && rename.new_seen));
     }
 
     fn resolve_new_link_path(&self, from: &Path, new_name: &str) -> Result<PathBuf, ResponseError> {

@@ -5,7 +5,7 @@ mod support;
 use lsp_types::Url;
 use serde_json::{json, Value};
 
-use support::run_session;
+use support::{run_session, run_session_with_pause};
 
 #[test]
 fn rename_anchor_updates_declaration_and_workspace_references() {
@@ -320,6 +320,66 @@ fn rename_link_path_keeps_diagnostics_clean_after_client_applies_edit() {
     let responses = run_session(&msgs);
     let diagnostics = diagnostics_for(&responses, &links_uri);
     assert_eq!(diagnostics.last().unwrap().len(), 0);
+}
+
+#[test]
+fn rename_link_path_file_watch_delete_clears_missing_optimistic_target() {
+    let dir = std::env::temp_dir().join("djot-ls-rename-link-path-watch-delete-test");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let links = dir.join("links.dj");
+    let outline = dir.join("outline.dj");
+    let renamed = dir.join("outlinx.dj");
+    let doc_before = "# Links\n\n[Appendix](outline.dj#appendix)\n";
+    let doc_after = "# Links\n\n[Appendix](outlinx.dj#appendix)\n";
+    std::fs::write(&links, doc_before).unwrap();
+    std::fs::write(&outline, "{#appendix}\n# Appendix\n").unwrap();
+
+    let root_uri = Url::from_directory_path(&dir).unwrap().to_string();
+    let links_uri = Url::from_file_path(&links).unwrap().to_string();
+    let outline_uri = Url::from_file_path(&outline).unwrap().to_string();
+    let path_col = doc_before
+        .lines()
+        .nth(2)
+        .unwrap()
+        .find("outline.dj")
+        .unwrap() as i64;
+    let first_msgs = [
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+            "capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true,"resourceOperations":["rename"]}}},
+            "processId":null,
+            "rootUri":root_uri
+        }}),
+        json!({"jsonrpc":"2.0","method":"initialized","params":{}}),
+        json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":links_uri,"languageId":"djot","version":1,"text":doc_before}}}),
+        json!({"jsonrpc":"2.0","id":2,"method":"textDocument/rename",
+        "params":{"textDocument":{"uri":links_uri},"position":{"line":2,"character":path_col},"newName":"outlinx.dj"}}),
+    ];
+    let second_msgs = [
+        json!({"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":links_uri,"version":2},"contentChanges":[{"text":doc_after}]}}),
+        json!({"jsonrpc":"2.0","method":"workspace/didChangeWatchedFiles","params":{"changes":[{"uri":outline_uri,"type":3}]}}),
+        json!({"jsonrpc":"2.0","id":3,"method":"textDocument/definition",
+        "params":{"textDocument":{"uri":links_uri},"position":{"line":2,"character":path_col}}}),
+        json!({"jsonrpc":"2.0","id":99,"method":"shutdown","params":null}),
+        json!({"jsonrpc":"2.0","method":"exit","params":null}),
+    ];
+
+    let remove_outline = std::thread::spawn({
+        let outline = outline.clone();
+        move || {
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            std::fs::remove_file(outline).unwrap();
+        }
+    });
+    let responses = run_session_with_pause(
+        &first_msgs,
+        &second_msgs,
+        std::time::Duration::from_millis(100),
+    );
+    remove_outline.join().unwrap();
+
+    assert!(!renamed.exists());
+    assert_eq!(response_result(&responses, 3), &Value::Null);
 }
 
 #[test]
