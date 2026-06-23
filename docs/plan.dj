@@ -269,7 +269,7 @@ Remaining work:
 
 # Workspace integration
 
-- [ ] Track external workspace file changes after initialization. For Neovim on
+- [x] Track external workspace file changes after initialization. For Neovim on
   Linux, see [neovim file watching](neovim-file-watching.dj); reliable external
   updates should not depend solely on client-side LSP file watching.
 
@@ -281,8 +281,5 @@ Remaining work:
     `.djot` paths.
   - [x] Optionally register narrow LSP file watchers such as `**/*.dj` and
     `**/*.djot` when the client advertises dynamic registration.
-  - [ ] Add a server-side watcher for reliable external updates on Linux,
-    scoped to Djot documents and conservative around large workspaces,
-    deletions, and overflow/recovery behavior.
   - [x] Reconcile optimistic path rename indexing with the eventual client or
     file-system outcome, using file notifications or targeted re-indexing.
