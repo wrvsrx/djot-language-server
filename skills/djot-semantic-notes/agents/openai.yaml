@@ -1,0 +1,4 @@
+interface:
+  display_name: "Djot Semantic Notes"
+  short_description: "Edit Djot notes using djot-tools semantics."
+  default_prompt: "Create or edit Djot notes that follow djot-tools task and reference semantics."

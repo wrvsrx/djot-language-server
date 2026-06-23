@@ -29,6 +29,11 @@
                 lockFile = ./Cargo.lock;
               };
 
+              postInstall = ''
+                mkdir -p $out/share/djot-tools
+                cp -r skills $out/share/djot-tools/
+              '';
+
               meta = {
                 description = "Language server and tools for Djot documents";
                 license = pkgs.lib.licenses.mit;
