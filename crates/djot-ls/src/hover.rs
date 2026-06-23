@@ -1,4 +1,4 @@
-use crate::lsp_utils::offset_to_position;
+use crate::position::offset_to_position;
 
 pub(crate) fn anchor_hover_markdown(
     display_path: String,

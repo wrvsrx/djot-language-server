@@ -3,7 +3,7 @@ use std::ops::Range as ByteRange;
 use jotdown::{Container, Event, Parser};
 use lsp_types::{CompletionItem, CompletionItemKind, CompletionTextEdit, TextEdit};
 
-use crate::lsp_utils::byte_range_to_lsp;
+use crate::position::byte_range_to_lsp;
 
 #[derive(Debug, Clone)]
 pub(crate) struct LinkTargetCompletion {

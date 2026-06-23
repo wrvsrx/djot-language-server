@@ -1,20 +1,27 @@
 use std::collections::HashSet;
-use std::ffi::OsString;
 use std::ops::ControlFlow;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 mod code_action;
 mod completion;
+mod diagnostics;
 mod edit_context;
 mod hover;
 mod lsp_utils;
+mod path_utils;
+mod position;
 mod rename;
+mod symbols;
+mod workspace_index;
 
 use code_action::resolve_code_actions as resolve_code_actions_for_document;
 use completion::*;
 use hover::{anchor_hover_markdown, file_hover_markdown};
 use lsp_utils::*;
+use path_utils::{is_djot_file, relative_link_path};
+use position::{byte_range_to_lsp, position_to_offset};
 use rename::{anchor_rename_workspace_edit, path_rename_workspace_edit};
+use symbols::{document_title, to_document_symbol};
 
 use async_lsp::client_monitor::ClientProcessMonitorLayer;
 use async_lsp::concurrency::ConcurrencyLayer;
@@ -24,42 +31,38 @@ use async_lsp::server::LifecycleLayer;
 use async_lsp::tracing::TracingLayer;
 use async_lsp::{ClientSocket, LanguageServer, ResponseError};
 use djot_core::{
-    heading_outline, metadata_block, resolve_target, AnalysisDiagnostic, DiagnosticKind, Heading,
-    PathRenameError, RefTarget, RenameTargetError, Workspace,
+    heading_outline, resolve_target, PathRenameError, RefTarget, RenameTargetError, Workspace,
 };
 use futures::future::BoxFuture;
 use lsp_types::{
     CodeActionKind, CodeActionOptions, CodeActionParams, CodeActionProviderCapability,
     CodeActionResponse, CompletionItem, CompletionItemKind, CompletionOptions, CompletionParams,
-    CompletionResponse, Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity,
-    DidChangeConfigurationParams, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
-    DidOpenTextDocumentParams, DidSaveTextDocumentParams, DocumentSymbol, DocumentSymbolParams,
-    DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents,
-    HoverParams, HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams,
-    Location, MarkupContent, MarkupKind, NumberOrString, OneOf, Position, PrepareRenameResponse,
-    ProgressParams, ProgressParamsValue, PublishDiagnosticsParams, ReferenceParams, RenameOptions,
-    RenameParams, ServerCapabilities, SymbolKind, TextDocumentPositionParams,
-    TextDocumentSyncCapability, TextDocumentSyncKind, Url, WorkDoneProgress, WorkDoneProgressBegin,
-    WorkDoneProgressEnd, WorkDoneProgressOptions, WorkDoneProgressReport, WorkspaceEdit,
+    CompletionResponse, DidChangeConfigurationParams, DidChangeTextDocumentParams,
+    DidCloseTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
+    DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse,
+    Hover, HoverContents, HoverParams, HoverProviderCapability, InitializeParams, InitializeResult,
+    InitializedParams, Location, MarkupContent, MarkupKind, OneOf, Position, PrepareRenameResponse,
+    ReferenceParams, RenameOptions, RenameParams, ServerCapabilities, TextDocumentPositionParams,
+    TextDocumentSyncCapability, TextDocumentSyncKind, Url, WorkDoneProgressOptions, WorkspaceEdit,
 };
 use tower::ServiceBuilder;
 use tracing::Level;
 
 /// Server state. async-lsp's omni-trait hands us `&mut self` on every request and
 /// notification, so plain owned state needs no locking.
-struct ServerState {
+pub(crate) struct ServerState {
     #[allow(dead_code)]
-    client: ClientSocket,
+    pub(crate) client: ClientSocket,
     /// Parsed documents, keyed by file path. Open buffers are inserted on
     /// did_open/did_change; cross-file link targets are loaded from disk lazily.
-    workspace: Workspace,
+    pub(crate) workspace: Workspace,
     /// Roots supplied by the LSP client during initialize.
-    workspace_roots: Vec<PathBuf>,
+    pub(crate) workspace_roots: Vec<PathBuf>,
     /// Client support for workspace edits that include resource operations.
     #[allow(dead_code)]
-    workspace_edit_capabilities: ClientWorkspaceEditCapabilities,
+    pub(crate) workspace_edit_capabilities: ClientWorkspaceEditCapabilities,
     /// Open buffers that should receive publishDiagnostics updates.
-    open_documents: HashSet<PathBuf>,
+    pub(crate) open_documents: HashSet<PathBuf>,
 }
 
 impl LanguageServer for ServerState {
@@ -267,96 +270,6 @@ impl LanguageServer for ServerState {
 }
 
 impl ServerState {
-    fn index_workspace_root(&mut self, root: &Path) -> usize {
-        index_djot_files(root, &mut |path, text| {
-            self.workspace.insert(path, text);
-        })
-    }
-
-    fn is_in_workspace(&self, path: &Path) -> bool {
-        self.workspace_roots
-            .iter()
-            .any(|root| path.starts_with(root))
-    }
-
-    fn index_workspace_roots_with_progress(&mut self) {
-        if self.workspace_roots.is_empty() {
-            return;
-        }
-
-        self.notify_index_progress(WorkDoneProgress::Begin(WorkDoneProgressBegin {
-            title: "Indexing Djot workspace".to_string(),
-            cancellable: Some(false),
-            message: Some("Scanning .dj/.djot files".to_string()),
-            percentage: None,
-        }));
-
-        let mut indexed = 0usize;
-        for root in self.workspace_roots.clone() {
-            indexed += self.index_workspace_root(&root);
-        }
-
-        self.notify_index_progress(WorkDoneProgress::Report(WorkDoneProgressReport {
-            cancellable: Some(false),
-            message: Some(format!("Indexed {indexed} files")),
-            percentage: None,
-        }));
-        self.notify_index_progress(WorkDoneProgress::End(WorkDoneProgressEnd {
-            message: Some(format!("Indexed {indexed} Djot files")),
-        }));
-    }
-
-    fn notify_index_progress(&self, progress: WorkDoneProgress) {
-        let _ = self
-            .client
-            .notify::<lsp_types::notification::Progress>(ProgressParams {
-                token: NumberOrString::String("djot-ls-index".to_string()),
-                value: ProgressParamsValue::WorkDone(progress),
-            });
-    }
-
-    fn publish_open_document_diagnostics(&self) {
-        for path in &self.open_documents {
-            self.publish_diagnostics_for(path);
-        }
-    }
-
-    fn publish_diagnostics_for(&self, path: &Path) {
-        let Some(entry) = self.workspace.get(path) else {
-            return;
-        };
-        let Some(uri) = Url::from_file_path(path).ok() else {
-            return;
-        };
-        let diagnostics = self
-            .workspace
-            .diagnostics_for(path)
-            .into_iter()
-            .map(|diagnostic| to_lsp_diagnostic(&entry.text, &uri, diagnostic))
-            .collect();
-
-        let _ = self
-            .client
-            .notify::<lsp_types::notification::PublishDiagnostics>(PublishDiagnosticsParams {
-                uri,
-                diagnostics,
-                version: None,
-            });
-    }
-
-    fn clear_diagnostics_for(&self, path: &Path) {
-        let Some(uri) = Url::from_file_path(path).ok() else {
-            return;
-        };
-        let _ = self
-            .client
-            .notify::<lsp_types::notification::PublishDiagnostics>(PublishDiagnosticsParams {
-                uri,
-                diagnostics: Vec::new(),
-                version: None,
-            });
-    }
-
     /// Resolve goto-definition for the link under `position` in `uri`. Same-file
     /// `#id` links and cross-file `path#id` links are handled uniformly through
     /// the workspace index; a cross-file target not yet indexed is loaded from
@@ -789,194 +702,6 @@ impl ServerState {
         anchors.sort_by(|a, b| a.id.to_lowercase().cmp(&b.id.to_lowercase()));
         Some(anchors)
     }
-
-    fn display_path(&self, path: &Path) -> String {
-        self.workspace_roots
-            .iter()
-            .find_map(|root| path.strip_prefix(root).ok())
-            .unwrap_or(path)
-            .display()
-            .to_string()
-    }
-}
-
-fn to_lsp_diagnostic(text: &str, uri: &Url, diagnostic: AnalysisDiagnostic) -> Diagnostic {
-    let (code, message, related_information, severity) = match diagnostic.kind {
-        DiagnosticKind::UnresolvedAnchor { id } => (
-            "unresolved-anchor",
-            format!("Unresolved anchor `{}`", id),
-            None,
-            DiagnosticSeverity::WARNING,
-        ),
-        DiagnosticKind::UnresolvedPath { path } => (
-            "unresolved-path",
-            format!("Unresolved Djot path `{}`", path),
-            None,
-            DiagnosticSeverity::WARNING,
-        ),
-        DiagnosticKind::DuplicateAnchor { id, first_range } => (
-            "duplicate-anchor",
-            format!("Duplicate anchor `{}`", id),
-            Some(vec![DiagnosticRelatedInformation {
-                location: Location::new(uri.clone(), byte_range_to_lsp(text, &first_range)),
-                message: "First definition is here.".to_string(),
-            }]),
-            DiagnosticSeverity::WARNING,
-        ),
-        DiagnosticKind::MissingTaskDueForRecur => (
-            "missing-task-due-for-recur",
-            "Recurring tasks with `recur` need a valid RFC 3339 `due` datetime.".to_string(),
-            None,
-            DiagnosticSeverity::WARNING,
-        ),
-        DiagnosticKind::InvalidTaskRecur { recur } => (
-            "invalid-task-recur",
-            format!(
-                "Unsupported task `recur` value `{}`. Use an ISO 8601 duration like `P1D`, `P1W`, `P1M`, or `P1Y`.",
-                recur
-            ),
-            None,
-            DiagnosticSeverity::WARNING,
-        ),
-        DiagnosticKind::ConflictingTaskClosedState => (
-            "conflicting-task-closed-state",
-            "Task cannot have both `done` and `canceled`.".to_string(),
-            None,
-            DiagnosticSeverity::WARNING,
-        ),
-        DiagnosticKind::InvalidTaskPrevTarget { id } => (
-            "invalid-task-prev-target",
-            format!("Task `prev` target `{}` must be a task.", id),
-            None,
-            DiagnosticSeverity::WARNING,
-        ),
-        DiagnosticKind::InvalidTaskDependencyTarget { target } => (
-            "invalid-task-dependency-target",
-            format!("Task dependency target `{}` must be a task.", target),
-            None,
-            DiagnosticSeverity::WARNING,
-        ),
-        DiagnosticKind::TaskSelfDependency { target } => (
-            "task-self-dependency",
-            format!("Task cannot depend on itself via `{}`.", target),
-            None,
-            DiagnosticSeverity::WARNING,
-        ),
-        DiagnosticKind::TaskDependencyCycle { id } => (
-            "task-dependency-cycle",
-            format!("Task dependency cycle includes `{}`.", id),
-            None,
-            DiagnosticSeverity::WARNING,
-        ),
-        DiagnosticKind::TaskBlocked { count } => (
-            "task-blocked",
-            match count {
-                1 => "Blocked by 1 open dependency.".to_string(),
-                _ => format!("Blocked by {count} open dependencies."),
-            },
-            None,
-            DiagnosticSeverity::HINT,
-        ),
-    };
-
-    Diagnostic {
-        range: byte_range_to_lsp(text, &diagnostic.range),
-        severity: Some(severity),
-        code: Some(NumberOrString::String(code.to_string())),
-        code_description: None,
-        source: Some("djot-ls".to_string()),
-        message,
-        related_information,
-        tags: None,
-        data: None,
-    }
-}
-
-fn document_title(text: &str) -> Option<String> {
-    let metadata = metadata_block(text)?;
-    let value: toml::Value = toml::from_str(&metadata).ok()?;
-    value
-        .get("title")
-        .and_then(|title| title.as_str())
-        .map(str::to_string)
-}
-
-fn relative_link_path(from: &Path, target: &Path) -> Option<String> {
-    let base = from.parent()?;
-    Some(relative_path(base, target)?.display().to_string())
-}
-
-fn relative_path(base: &Path, target: &Path) -> Option<PathBuf> {
-    let base_components = lexical_components(base)?;
-    let target_components = lexical_components(target)?;
-
-    if base_components.first() != target_components.first() {
-        return None;
-    }
-
-    let common_len = base_components
-        .iter()
-        .zip(target_components.iter())
-        .take_while(|(base, target)| base == target)
-        .count();
-
-    let mut out = PathBuf::new();
-    for _ in common_len..base_components.len() {
-        out.push("..");
-    }
-    for component in &target_components[common_len..] {
-        out.push(component);
-    }
-
-    Some(if out.as_os_str().is_empty() {
-        PathBuf::from(".")
-    } else {
-        out
-    })
-}
-
-fn lexical_components(path: &Path) -> Option<Vec<OsString>> {
-    let mut out = Vec::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                out.pop()?;
-            }
-            Component::Normal(part) => out.push(part.to_os_string()),
-            Component::RootDir => out.push(OsString::from(std::path::MAIN_SEPARATOR.to_string())),
-            Component::Prefix(prefix) => out.push(prefix.as_os_str().to_os_string()),
-        }
-    }
-    Some(out)
-}
-
-/// Convert a core [`Heading`] (byte offsets) into an LSP `DocumentSymbol`.
-fn to_document_symbol(text: &str, heading: &Heading) -> DocumentSymbol {
-    let children: Vec<_> = heading
-        .children
-        .iter()
-        .map(|child| to_document_symbol(text, child))
-        .collect();
-    #[allow(deprecated)]
-    DocumentSymbol {
-        name: if heading.name.is_empty() {
-            format!("H{}", heading.level)
-        } else {
-            heading.name.clone()
-        },
-        detail: Some(format!("H{}", heading.level)),
-        kind: SymbolKind::STRING,
-        tags: None,
-        deprecated: None,
-        range: byte_range_to_lsp(text, &heading.range),
-        selection_range: byte_range_to_lsp(text, &heading.selection_range),
-        children: if children.is_empty() {
-            None
-        } else {
-            Some(children)
-        },
-    }
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -1008,34 +733,4 @@ async fn main() {
     let stdout = async_lsp::stdio::PipeStdout::lock_tokio().unwrap();
 
     server.run_buffered(stdin, stdout).await.unwrap();
-}
-
-fn index_djot_files(root: &Path, insert: &mut impl FnMut(PathBuf, String)) -> usize {
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return 0;
-    };
-
-    let mut indexed = 0;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
-
-        if file_type.is_dir() {
-            indexed += index_djot_files(&path, insert);
-        } else if file_type.is_file() && is_djot_file(&path) {
-            if let Ok(text) = std::fs::read_to_string(&path) {
-                insert(path, text);
-                indexed += 1;
-            }
-        }
-    }
-    indexed
-}
-
-fn is_djot_file(path: &Path) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| ext == "dj" || ext == "djot")
 }

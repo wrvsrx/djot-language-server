@@ -4,7 +4,7 @@ use chrono::{Local, SecondsFormat};
 use djot_core::TextEdit as CoreTextEdit;
 use lsp_types::{TextEdit, Url, WorkspaceEdit};
 
-use crate::lsp_utils::byte_range_to_lsp;
+use crate::position::byte_range_to_lsp;
 
 pub(crate) struct EditContext {
     timestamp: String,
