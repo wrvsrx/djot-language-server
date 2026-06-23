@@ -89,6 +89,32 @@ fn hover_shows_explicit_anchor_target() {
     assert!(value.contains("Important text.\nMore text."));
 }
 
+#[test]
+fn hover_shows_task_summary() {
+    let doc = "{#draft}\n::: task\nDraft.\n:::\n\n{#review created=\"2026-06-21T09:00:00Z\" due=\"2026-06-22T09:00:00Z\" wait=\"2026-06-21T12:00:00Z\" depends=\"#draft\"}\n::: task\nReview draft.\n:::\n";
+    let msgs = [
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{},"processId":null,"rootUri":null}}),
+        json!({"jsonrpc":"2.0","method":"initialized","params":{}}),
+        json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tasks.dj","languageId":"djot","version":1,"text":doc}}}),
+        json!({"jsonrpc":"2.0","id":2,"method":"textDocument/hover",
+               "params":{"textDocument":{"uri":"file:///tasks.dj"},"position":{"line":6,"character":3}}}),
+        json!({"jsonrpc":"2.0","id":99,"method":"shutdown","params":null}),
+        json!({"jsonrpc":"2.0","method":"exit","params":null}),
+    ];
+
+    let responses = run_session(&msgs);
+    let value = hover_value(&responses, 2);
+
+    assert!(value.contains("**Task** `Review draft.`"));
+    assert!(value.contains("status: `blocked`"));
+    assert!(value.contains("id: `review`"));
+    assert!(value.contains("created: `2026-06-21T09:00:00Z`"));
+    assert!(value.contains("due: `2026-06-22T09:00:00Z`"));
+    assert!(value.contains("wait: `2026-06-21T12:00:00Z`"));
+    assert!(value.contains("depends: `#draft`"));
+    assert!(value.contains("blocked by: `tasks.dj#draft`"));
+}
+
 fn hover_value(responses: &[Value], id: i64) -> String {
     response_result(responses, id)["contents"]["value"]
         .as_str()

@@ -112,6 +112,14 @@ impl Workspace {
             .cloned()
     }
 
+    pub fn task_at(&self, path: &Path, offset: usize) -> Option<&Task> {
+        self.get(path)?
+            .analysis
+            .tasks
+            .iter()
+            .find(|task| task.range.contains(&offset))
+    }
+
     pub fn task_dependencies(&self, path: &Path, task: &Task) -> Vec<ResolvedTaskDependency> {
         let source_path = normalize(path);
         task.depends

@@ -21,7 +21,7 @@ use lsp_types::{
 
 use crate::code_action::resolve_code_actions as resolve_code_actions_for_document;
 use crate::completion::*;
-use crate::hover::{anchor_hover_markdown, file_hover_markdown};
+use crate::hover::{anchor_hover_markdown, file_hover_markdown, task_hover_markdown, TaskHover};
 use crate::lsp_utils::*;
 use crate::path_utils::{is_djot_file, relative_link_path};
 use crate::position::{byte_range_to_lsp, position_to_offset};
@@ -619,60 +619,103 @@ impl ServerState {
         let from = uri.to_file_path().ok()?;
         let offset = position_to_offset(&self.workspace.get(&from)?.text, position);
 
-        if let Some((id, anchor)) = self.workspace.anchor_at(&from, offset) {
+        if let Some(reference) = self.workspace.reference_at(&from, offset) {
+            let target = resolve_target(&from, &reference.target)?;
+            let source_range = reference.source.clone();
+
+            if !self.workspace.contains(&target.path) {
+                if let Ok(text) = std::fs::read_to_string(&target.path) {
+                    self.workspace.insert(target.path.clone(), text);
+                }
+            }
+
+            let source_lsp_range = {
+                let entry = self.workspace.get(&from)?;
+                byte_range_to_lsp(&entry.text, &source_range)
+            };
+            let entry = self.workspace.get(&target.path)?;
+            let value = match &target.id {
+                Some(id) => {
+                    let anchor = entry.analysis.index.anchors.get(id)?;
+                    anchor_hover_markdown(
+                        self.display_path(&target.path),
+                        id,
+                        &entry.text,
+                        &anchor.range,
+                    )
+                }
+                None => file_hover_markdown(self.display_path(&target.path), &entry.text),
+            };
+
+            return Some(Hover {
+                contents: HoverContents::Markup(MarkupContent {
+                    kind: MarkupKind::Markdown,
+                    value,
+                }),
+                range: Some(source_lsp_range),
+            });
+        }
+
+        if let Some(task) = self.workspace.task_at(&from, offset).cloned() {
             let entry = self.workspace.get(&from)?;
             return Some(Hover {
                 contents: HoverContents::Markup(MarkupContent {
                     kind: MarkupKind::Markdown,
-                    value: anchor_hover_markdown(
-                        self.display_path(&from),
-                        id,
-                        &entry.text,
-                        &anchor.range,
-                    ),
+                    value: task_hover_markdown(TaskHover {
+                        title: &task.title,
+                        id: task.id.as_deref(),
+                        created: task.created.as_deref(),
+                        due: task.due.as_deref(),
+                        wait: task.wait.as_deref(),
+                        done: task.done.as_deref(),
+                        canceled: task.canceled.as_deref(),
+                        recur: task.recur.as_deref(),
+                        prev: task.prev.as_deref(),
+                        depends: task
+                            .depends
+                            .iter()
+                            .map(|dependency| dependency.source.clone())
+                            .collect(),
+                        blockers: self
+                            .workspace
+                            .open_task_dependencies(&from, &task)
+                            .into_iter()
+                            .map(|dependency| {
+                                format!(
+                                    "{}#{}",
+                                    relative_link_path(&from, &dependency.target.path)
+                                        .unwrap_or_else(|| {
+                                            self.display_path(&dependency.target.path)
+                                        }),
+                                    dependency.target.id
+                                )
+                            })
+                            .collect(),
+                    }),
                 }),
-                range: Some(byte_range_to_lsp(&entry.text, &anchor.range)),
+                range: Some(byte_range_to_lsp(
+                    &entry.text,
+                    &task
+                        .title_range
+                        .clone()
+                        .unwrap_or_else(|| task.range.clone()),
+                )),
             });
         }
 
-        let (target, source_range) = {
-            let reference = self.workspace.reference_at(&from, offset)?;
-            (
-                resolve_target(&from, &reference.target)?,
-                reference.source.clone(),
-            )
-        };
-
-        if !self.workspace.contains(&target.path) {
-            if let Ok(text) = std::fs::read_to_string(&target.path) {
-                self.workspace.insert(target.path.clone(), text);
-            }
-        }
-
-        let source_lsp_range = {
-            let entry = self.workspace.get(&from)?;
-            byte_range_to_lsp(&entry.text, &source_range)
-        };
-        let entry = self.workspace.get(&target.path)?;
-        let value = match &target.id {
-            Some(id) => {
-                let anchor = entry.analysis.index.anchors.get(id)?;
-                anchor_hover_markdown(
-                    self.display_path(&target.path),
-                    id,
-                    &entry.text,
-                    &anchor.range,
-                )
-            }
-            None => file_hover_markdown(self.display_path(&target.path), &entry.text),
-        };
-
+        let (id, anchor) = self.workspace.anchor_at(&from, offset)?;
+        let entry = self.workspace.get(&from)?;
         Some(Hover {
             contents: HoverContents::Markup(MarkupContent {
                 kind: MarkupKind::Markdown,
-                value,
+                value: anchor_hover_markdown(
+                    self.display_path(&from),
+                    id,
+                    &entry.text,
+                    &anchor.range,
+                ),
             }),
-            range: Some(source_lsp_range),
+            range: Some(byte_range_to_lsp(&entry.text, &anchor.range)),
         })
     }
 

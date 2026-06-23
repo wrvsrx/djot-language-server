@@ -173,7 +173,7 @@ support.
 
 - [ ] Add editor/tooling affordances once the core task model exists:
 
-  - [ ] hover summary for completion state, id, created datetime, done/canceled
+  - [x] hover summary for completion state, id, created datetime, done/canceled
     datetime, due/wait, blocked reason, dependency summary, and title
   - [ ] document symbols for tasks
   - [x] code action to add `done`
@@ -191,7 +191,7 @@ support.
 - [x] `wait` task metadata for deferred open tasks, including timestamp task
   queries, `now`, and recurring-task advancement
 
-- [ ] Define a shared spelling for task reference attributes:
+- [x] Define a shared spelling for task reference attributes:
 
   - Apply the convention to the existing single-target `prev` attribute and to
     future multi-target attributes such as `depends`.

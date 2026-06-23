@@ -135,7 +135,7 @@ fn index_tracks_reference_target_path_ranges() {
 
 #[test]
 fn index_tracks_task_prev_references() {
-    let text = "{prev=\"#old-task\"}\n::: task\nNext task.\n:::\n\n{prev=\"other.dj#previous\"}\n::: task\nCross-file next task.\n:::\n\n{prev=\"other.dj\"}\n::: task\nFile-only prev is not a reference.\n:::\n";
+    let text = "{prev=\"#old-task\"}\n::: task\nNext task.\n:::\n\n{prev=\"other%20file.dj#previous\"}\n::: task\nCross-file next task.\n:::\n\n{prev=\"other.dj\"}\n::: task\nFile-only prev is not a reference.\n:::\n";
     let index = build_index(text);
 
     let refs = index
@@ -171,11 +171,11 @@ fn index_tracks_task_prev_references() {
                 ReferenceKind::TaskPrev,
             ),
             (
-                "other.dj#previous".to_string(),
-                Some("other.dj".to_string()),
+                "other%20file.dj#previous".to_string(),
+                Some("other%20file.dj".to_string()),
                 Some("previous".to_string()),
                 RefTarget::External {
-                    path: "other.dj".to_string(),
+                    path: "other file.dj".to_string(),
                     id: Some("previous".to_string()),
                 },
                 ReferenceKind::TaskPrev,

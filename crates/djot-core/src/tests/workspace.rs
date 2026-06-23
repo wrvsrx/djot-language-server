@@ -355,6 +355,19 @@ fn workspace_accepts_task_prev_target_inherited_from_list_item() {
 }
 
 #[test]
+fn workspace_accepts_percent_encoded_cross_file_task_prev_target() {
+    let current = PathBuf::from("/notes/current.dj");
+    let previous = PathBuf::from("/notes/Project Plan.dj");
+    let current_doc = "{prev=\"Project%20Plan.dj#review\"}\n::: task\nFollow-up task.\n:::\n";
+    let previous_doc = "{#review}\n::: task\nReview.\n:::\n";
+    let mut ws = Workspace::new();
+    ws.insert(current.clone(), current_doc.to_string());
+    ws.insert(previous, previous_doc.to_string());
+
+    assert_eq!(ws.diagnostics_for(&current), Vec::new());
+}
+
+#[test]
 fn workspace_resolves_task_dependencies_and_blocked_state() {
     let a = PathBuf::from("/notes/a.dj");
     let b = PathBuf::from("/notes/b.dj");

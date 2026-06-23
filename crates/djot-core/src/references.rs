@@ -132,7 +132,7 @@ pub(crate) fn task_prev_reference(
     attrs: &Attributes,
 ) -> Option<Reference> {
     let prev = attrs.get_value("prev")?.to_string();
-    let target = parse_dst(&prev);
+    let target = parse_task_reference_target(&prev);
     match &target {
         RefTarget::Internal { .. } => {}
         RefTarget::External { path, id: Some(_) } if is_djot_path(path) => {}
@@ -140,8 +140,8 @@ pub(crate) fn task_prev_reference(
     }
 
     let source = attribute_value_range(text, span, "prev", &prev)?;
-    let target_path_range = reference_target_path_range(text, &source, &target);
-    let target_id_range = reference_target_id_range(text, &source, &target);
+    let target_path_range = task_reference_path_range(&prev, &source, &target);
+    let target_id_range = task_reference_id_range(&prev, &source, &target);
     Some(Reference {
         source,
         target_path_range,
@@ -216,6 +216,10 @@ fn dependency_tokens(source: &str) -> Vec<(&str, Range<usize>)> {
 }
 
 fn parse_dependency_target(source: &str) -> RefTarget {
+    parse_task_reference_target(source)
+}
+
+fn parse_task_reference_target(source: &str) -> RefTarget {
     if let Some(id) = source.strip_prefix('#') {
         RefTarget::Internal { id: id.to_string() }
     } else if let Some((path, id)) = source.split_once('#') {
@@ -228,38 +232,49 @@ fn parse_dependency_target(source: &str) -> RefTarget {
     }
 }
 
-fn dependency_target_path_range(dependency: &TaskDependency) -> Option<Range<usize>> {
-    match &dependency.target {
+fn task_reference_path_range(
+    source: &str,
+    range: &Range<usize>,
+    target: &RefTarget,
+) -> Option<Range<usize>> {
+    match target {
         RefTarget::External { .. } => {
-            let source = dependency.source.as_str();
             let hash = source.find('#')?;
             if hash == 0 {
                 None
             } else {
-                Some(dependency.range.start..dependency.range.start + hash)
+                Some(range.start..range.start + hash)
             }
         }
         RefTarget::Internal { .. } | RefTarget::Url(_) => None,
     }
 }
 
-fn dependency_target_id_range(dependency: &TaskDependency) -> Option<Range<usize>> {
-    match &dependency.target {
+fn task_reference_id_range(
+    source: &str,
+    range: &Range<usize>,
+    target: &RefTarget,
+) -> Option<Range<usize>> {
+    match target {
         RefTarget::Internal { .. } => {
-            let start = dependency.range.start
-                + dependency
-                    .source
-                    .strip_prefix('#')
-                    .map_or(0, |_| '#'.len_utf8());
-            Some(start..dependency.range.end)
+            let start = range.start + source.strip_prefix('#').map_or(0, |_| '#'.len_utf8());
+            Some(start..range.end)
         }
         RefTarget::External { .. } => {
-            let hash = dependency.source.find('#')?;
-            let start = dependency.range.start + hash + '#'.len_utf8();
-            Some(start..dependency.range.end)
+            let hash = source.find('#')?;
+            let start = range.start + hash + '#'.len_utf8();
+            Some(start..range.end)
         }
         RefTarget::Url(_) => None,
     }
+}
+
+fn dependency_target_path_range(dependency: &TaskDependency) -> Option<Range<usize>> {
+    task_reference_path_range(&dependency.source, &dependency.range, &dependency.target)
+}
+
+fn dependency_target_id_range(dependency: &TaskDependency) -> Option<Range<usize>> {
+    task_reference_id_range(&dependency.source, &dependency.range, &dependency.target)
 }
 
 pub(crate) fn is_diagnostic_target(target: &RefTarget) -> bool {

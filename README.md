@@ -41,6 +41,9 @@ the disk index while they are edited.
 Shows the target for a link or anchor under the cursor: target kind, anchor id,
 relative path and line, and a short djot source preview.
 
+On task divs, hover shows the task title, current state, id, task datetimes,
+recurrence, previous-task reference, dependency list, and open blockers.
+
 Document sync is full-text.
 
 More capabilities (diagnostics, completion, semantic tokens) are

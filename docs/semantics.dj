@@ -186,15 +186,23 @@ Current task fields are intentionally minimal:
 - `recur`: an ISO 8601 duration string describing how tooling should create
   the next task instance after completing this one. Current tooling accepts one
   positive integer date unit: `PnD`, `PnW`, `PnM`, or `PnY`.
-- `prev`: an anchored Djot target such as `#weekly-review-2026-06-21` or
+- `prev`: an anchored task reference such as `#weekly-review-2026-06-21` or
   `archive.dj#weekly-review-2026-06-21` pointing to the previous task instance
   in a repeated chain. The target anchor must identify a task.
 - `depends`: a whitespace-separated list of task references that must be
   completed or canceled before this task is actionable. Same-file dependencies
   are written as `#draft-task`; cross-file dependencies use
   `path.dj#task-id`. Percent-encoded path bytes such as `%20` are decoded when
-  resolving cross-file dependency paths. Bare ids such as `draft-task` are
+  resolving cross-file task reference paths. Bare ids such as `draft-task` are
   valid only when defining an id attribute, not when referencing a task.
+
+Task reference attributes use the same spelling for `prev` and `depends`:
+`#task-id` for same-file tasks and `path.dj#task-id` for cross-file tasks. If a
+cross-file path contains whitespace or other characters that would not survive
+a whitespace-separated attribute value, write the path percent-encoded, for
+example `Project%20Plan.dj#review`. Tooling normalizes parsed task references to
+workspace path plus task id before comparing, querying, diagnostics, hover, or
+recurring-task edit generation.
 
 A task with `due` and `recur` is a recurring task instance. When completed
 through tooling, the completed instance keeps its `done` timestamp and a new
