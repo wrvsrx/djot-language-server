@@ -152,6 +152,17 @@ fn task_done_edits_by_id_mark_task_done() {
 }
 
 #[test]
+fn recurring_list_task_with_trailing_blank_line_creates_next_list_item() {
+    let text = "- {#daily created=\"2026-06-24T01:13:36+08:00\"}\n  {recur=\"P1D\"}\n  {due=\"2026-06-24T01:13:45+08:00\"}\n  ::: task\n  a task\n  :::\n\n";
+    let edits = task_done_edits_by_id(text, "daily", "2026-06-24T01:14:00+08:00").unwrap();
+    let updated = apply_text_edits(text.to_string(), edits).unwrap();
+
+    assert!(updated.contains("\n- {#a-task-2026-06-25}\n"));
+    assert!(updated.contains("  {created=\"2026-06-24T01:14:00+08:00\" due=\"2026-06-25T01:13:45+08:00\" recur=\"P1D\" prev=\"#daily\"}\n"));
+    assert!(!updated.contains("\n\n  {#a-task-2026-06-25}\n"));
+}
+
+#[test]
 fn task_list_item_conversion_edit_converts_open_native_task() {
     let text = "# Tasks\n\n  - [ ] Write parser.\n";
     let edit =

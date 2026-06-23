@@ -208,7 +208,8 @@ fn single_task_list_item_context<'a>(
     let list_start = containing_list_item_start(text, task_line_start, list_indent, task_indent)?;
     let list_end = list_item_end(text, list_start, list_indent)?;
     let task_end_line_offset = task_range_end.saturating_sub(1);
-    if list_end != line_bounds(text, task_end_line_offset).map(|(_, end)| end)? {
+    let task_end_line = line_bounds(text, task_end_line_offset).map(|(_, end)| end)?;
+    if last_nonblank_line_end(text, task_end_line, list_end)? != task_end_line {
         return None;
     }
     if has_indented_content_after(text, list_end, list_indent) {
@@ -293,6 +294,26 @@ fn list_item_end(text: &str, list_start: usize, list_indent: &str) -> Option<usi
     }
 
     Some(last_end)
+}
+
+fn last_nonblank_line_end(text: &str, start: usize, end: usize) -> Option<usize> {
+    let mut line_start = start;
+    let mut last_nonblank = None;
+    while line_start < end {
+        let (_, line_end) = line_bounds(text, line_start)?;
+        let line = text
+            .get(line_start..line_end)?
+            .strip_suffix('\r')
+            .unwrap_or(text.get(line_start..line_end)?);
+        if !line.trim().is_empty() {
+            last_nonblank = Some(line_end);
+        }
+        let Some(next) = next_line_start(text, line_end) else {
+            break;
+        };
+        line_start = next;
+    }
+    last_nonblank.or(Some(start))
 }
 
 fn has_indented_content_after(text: &str, line_end: usize, list_indent: &str) -> bool {
