@@ -40,6 +40,8 @@ This is a **Cargo workspace** (`crates/*`) so the djot semantics can be shared b
 - Build: `cargo build` (binary is `target/debug/djot-ls`)
 - Test: `cargo test` (whole workspace, including `djot-core`, `djot-export`,
   and the `djot-ls` integration tests)
+- Warning gate: `cargo check --workspace --all-targets` catches production and
+  test-target warnings that `cargo test` may not surface.
 - Run one test: `cargo test -p djot-ls --test document_symbol did_save_does_not_crash_the_server`
 - Test the core lib only: `cargo test -p djot-core`
 - Test the exporter only: `cargo test -p djot-export`
@@ -50,7 +52,7 @@ This is a **Cargo workspace** (`crates/*`) so the djot semantics can be shared b
 - Build the Nix package: `nix build .`; the package name is `djot-tools` and
   installs `djot-ls`, `djot-export`, and `djot-filter`.
 - The dev environment is a Nix flake (`use_flake .` via direnv); `dev/envrc` is symlinked to the repo-root `.envrc`.
-- Git hooks live in `dev/hooks/`; enable them once per clone with `git config core.hooksPath dev/hooks`. The `pre-commit` hook checks that `README.md` is still in sync with `README.dj` whenever either is committed.
+- Git hooks live in `dev/hooks/`; enable them once per clone with `git config core.hooksPath dev/hooks`. The `pre-commit` hook runs `cargo check --workspace --all-targets` as the warning gate and checks that `README.md` is still in sync with `README.dj` whenever either is committed.
 
 ## Commit workflow
 
@@ -76,9 +78,10 @@ the implementation is complete and tests pass, summarize the branch and ask the
 user to confirm before merging it back into `main`.
 
 Before each commit, check `git status --short` and `git diff` so unrelated user
-changes are not included. Run the narrowest relevant tests before intermediate
-commits, and run the full relevant suite before the final implementation
-commit. Use concise conventional-style messages in the form
+changes are not included. Run `cargo check --workspace --all-targets` before
+commits so warnings are caught across production and test targets. Run the
+narrowest relevant tests before intermediate commits, and run the full relevant
+suite before the final implementation commit. Use concise conventional-style messages in the form
 `type(scope): subject` for code changes, such as `feat(core): ...`,
 `fix(ls): ...`, `test(filter): ...`, or `chore(dev): ...`. Use `docs: ...`
 for documentation-only changes unless the surrounding history clearly uses a

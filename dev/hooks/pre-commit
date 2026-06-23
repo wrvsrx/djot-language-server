@@ -7,6 +7,11 @@
 #
 set -euo pipefail
 
+cd "$(git rev-parse --show-toplevel)"
+
+echo "pre-commit: checking workspace warnings" >&2
+cargo check --workspace --all-targets
+
 # Only run when the README source or output is part of this commit.
 if ! git diff --cached --name-only | grep -qE '^README\.(dj|md)$'; then
     exit 0
@@ -16,8 +21,6 @@ if ! command -v pandoc >/dev/null 2>&1; then
     echo "pre-commit: pandoc not found; skipping README sync check" >&2
     exit 0
 fi
-
-cd "$(git rev-parse --show-toplevel)"
 
 # djot-export depends only on djot-core and lightweight pandoc JSON types, so
 # this build is cheap.

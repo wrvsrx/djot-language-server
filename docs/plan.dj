@@ -12,12 +12,12 @@ drift.
 
 - [ ] Stabilization priorities:
 
-  - [ ] treat `cargo check --workspace --all-targets` as a required warning
+  - [x] treat `cargo check --workspace --all-targets` as a required warning
     gate alongside `cargo test`, so production and test-target warnings do not
     drift.
   - [x] implement workspace file-change handling before advertising or
     registering file watchers.
-  - [ ] reconcile optimistic path rename indexing with the eventual client or
+  - [x] reconcile optimistic path rename indexing with the eventual client or
     file-system outcome.
 
 - [ ] `textDocument/documentSymbol`
@@ -66,7 +66,7 @@ drift.
     workspace links to the moved Djot file
   - [x] require client support for `documentChanges` and `rename` resource
     operations before returning file rename edits
-  - [ ] reconcile optimistic path rename indexing with client/file-system
+  - [x] reconcile optimistic path rename indexing with client/file-system
     outcome (e.g. file notifications or targeted re-indexing)
   - [x] rename link targets from either the anchor declaration or any reference
   - [x] return a `WorkspaceEdit` with same-file and cross-file text edits
@@ -279,5 +279,5 @@ Remaining work:
   - [ ] Add a server-side watcher for reliable external updates on Linux,
     scoped to Djot documents and conservative around large workspaces,
     deletions, and overflow/recovery behavior.
-  - [ ] Reconcile optimistic path rename indexing with the eventual client or
+  - [x] Reconcile optimistic path rename indexing with the eventual client or
     file-system outcome, using file notifications or targeted re-indexing.
