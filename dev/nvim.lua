@@ -14,4 +14,17 @@ vim.lsp.config['djot-ls'] = {
   capabilities = capabilities,
 }
 
+local function set_djot_semantic_highlights()
+  vim.api.nvim_set_hl(0, '@lsp.typemod.task.completed.djot', {
+    link = 'DiagnosticDeprecated',
+    default = true,
+  })
+end
+
+set_djot_semantic_highlights()
+
+vim.api.nvim_create_autocmd('ColorScheme', {
+  callback = set_djot_semantic_highlights,
+})
+
 vim.lsp.enable('djot-ls')
