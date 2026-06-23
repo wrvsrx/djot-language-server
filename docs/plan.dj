@@ -15,7 +15,7 @@ drift.
   - [ ] treat `cargo check --workspace --all-targets` as a required warning
     gate alongside `cargo test`, so production and test-target warnings do not
     drift.
-  - [ ] implement workspace file-change handling before advertising or
+  - [x] implement workspace file-change handling before advertising or
     registering file watchers.
   - [ ] reconcile optimistic path rename indexing with the eventual client or
     file-system outcome.
@@ -268,13 +268,13 @@ Remaining work:
   Linux, see [neovim file watching](neovim-file-watching.dj); reliable external
   updates should not depend solely on client-side LSP file watching.
 
-  - [ ] Add a `workspace/didChangeWatchedFiles` notification handler before
+  - [x] Add a `workspace/didChangeWatchedFiles` notification handler before
     advertising or dynamically registering file-watching behavior. async-lsp's
     omni-trait default handler can terminate the server for unimplemented
     standard notifications.
-  - [ ] Add targeted re-indexing for created, changed, and deleted `.dj` /
+  - [x] Add targeted re-indexing for created, changed, and deleted `.dj` /
     `.djot` paths.
-  - [ ] Optionally register narrow LSP file watchers such as `**/*.dj` and
+  - [x] Optionally register narrow LSP file watchers such as `**/*.dj` and
     `**/*.djot` when the client advertises dynamic registration.
   - [ ] Add a server-side watcher for reliable external updates on Linux,
     scoped to Djot documents and conservative around large workspaces,

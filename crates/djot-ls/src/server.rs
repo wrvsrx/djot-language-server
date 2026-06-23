@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 
-use async_lsp::{ClientSocket, LanguageServer, ResponseError};
+use async_lsp::{ClientSocket, LanguageClient, LanguageServer, ResponseError};
 use djot_core::{
     heading_outline, resolve_target, PathRenameError, RefTarget, RenameTargetError, Workspace,
 };
@@ -11,12 +11,14 @@ use lsp_types::{
     CodeActionKind, CodeActionOptions, CodeActionParams, CodeActionProviderCapability,
     CodeActionResponse, CompletionItem, CompletionItemKind, CompletionOptions, CompletionParams,
     CompletionResponse, DidChangeConfigurationParams, DidChangeTextDocumentParams,
-    DidCloseTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
-    DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse,
-    Hover, HoverContents, HoverParams, HoverProviderCapability, InitializeParams, InitializeResult,
+    DidChangeWatchedFilesParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
+    DidSaveTextDocumentParams, DocumentSymbolParams, DocumentSymbolResponse, FileChangeType,
+    FileSystemWatcher, GlobPattern, GotoDefinitionParams, GotoDefinitionResponse, Hover,
+    HoverContents, HoverParams, HoverProviderCapability, InitializeParams, InitializeResult,
     InitializedParams, Location, MarkupContent, MarkupKind, OneOf, Position, PrepareRenameResponse,
-    ReferenceParams, RenameOptions, RenameParams, ServerCapabilities, TextDocumentPositionParams,
-    TextDocumentSyncCapability, TextDocumentSyncKind, Url, WorkDoneProgressOptions, WorkspaceEdit,
+    ReferenceParams, Registration, RegistrationParams, RenameOptions, RenameParams,
+    ServerCapabilities, TextDocumentPositionParams, TextDocumentSyncCapability,
+    TextDocumentSyncKind, Url, WatchKind, WorkDoneProgressOptions, WorkspaceEdit,
 };
 
 use crate::code_action::resolve_code_actions as resolve_code_actions_for_document;
@@ -41,6 +43,8 @@ pub(crate) struct ServerState {
     /// Client support for workspace edits that include resource operations.
     #[allow(dead_code)]
     pub(crate) workspace_edit_capabilities: ClientWorkspaceEditCapabilities,
+    /// Client support for dynamically registering workspace file watchers.
+    pub(crate) file_watch_capabilities: ClientFileWatchCapabilities,
     /// Open buffers that should receive publishDiagnostics updates.
     pub(crate) open_documents: HashSet<PathBuf>,
 }
@@ -52,6 +56,7 @@ impl ServerState {
             workspace: Workspace::new(),
             workspace_roots: Vec::new(),
             workspace_edit_capabilities: ClientWorkspaceEditCapabilities::default(),
+            file_watch_capabilities: ClientFileWatchCapabilities::default(),
             open_documents: HashSet::new(),
         }
     }
@@ -67,6 +72,7 @@ impl LanguageServer for ServerState {
     ) -> BoxFuture<'static, Result<InitializeResult, Self::Error>> {
         self.workspace_roots = workspace_roots(&params);
         self.workspace_edit_capabilities = client_workspace_edit_capabilities(&params);
+        self.file_watch_capabilities = client_file_watch_capabilities(&params);
 
         Box::pin(async move {
             Ok(InitializeResult {
@@ -114,6 +120,7 @@ impl LanguageServer for ServerState {
 
     fn initialized(&mut self, _params: InitializedParams) -> Self::NotifyResult {
         self.index_workspace_roots_with_progress();
+        self.register_workspace_file_watchers();
         self.publish_open_document_diagnostics();
         ControlFlow::Continue(())
     }
@@ -172,6 +179,37 @@ impl LanguageServer for ServerState {
         &mut self,
         _params: DidChangeConfigurationParams,
     ) -> Self::NotifyResult {
+        ControlFlow::Continue(())
+    }
+
+    fn did_change_watched_files(
+        &mut self,
+        params: DidChangeWatchedFilesParams,
+    ) -> Self::NotifyResult {
+        for change in params.changes {
+            let Ok(path) = change.uri.to_file_path() else {
+                continue;
+            };
+            if !is_djot_file(&path) {
+                continue;
+            }
+            match change.typ {
+                FileChangeType::CREATED | FileChangeType::CHANGED => {
+                    if !self.open_documents.contains(&path) {
+                        if let Ok(text) = std::fs::read_to_string(&path) {
+                            self.workspace.insert(path, text);
+                        }
+                    }
+                }
+                FileChangeType::DELETED => {
+                    if !self.open_documents.contains(&path) {
+                        self.workspace.remove(&path);
+                    }
+                }
+                _ => {}
+            }
+        }
+        self.publish_open_document_diagnostics();
         ControlFlow::Continue(())
     }
 
@@ -262,6 +300,46 @@ impl LanguageServer for ServerState {
 }
 
 impl ServerState {
+    fn register_workspace_file_watchers(&self) {
+        if !self.file_watch_capabilities.dynamic_registration || self.workspace_roots.is_empty() {
+            return;
+        }
+
+        let params = RegistrationParams {
+            registrations: vec![Registration {
+                id: "djot-ls-workspace-djot-files".to_string(),
+                method: "workspace/didChangeWatchedFiles".to_string(),
+                register_options: Some(
+                    serde_json::to_value(lsp_types::DidChangeWatchedFilesRegistrationOptions {
+                        watchers: vec![
+                            FileSystemWatcher {
+                                glob_pattern: GlobPattern::String("**/*.dj".to_string()),
+                                kind: Some(
+                                    WatchKind::Create | WatchKind::Change | WatchKind::Delete,
+                                ),
+                            },
+                            FileSystemWatcher {
+                                glob_pattern: GlobPattern::String("**/*.djot".to_string()),
+                                kind: Some(
+                                    WatchKind::Create | WatchKind::Change | WatchKind::Delete,
+                                ),
+                            },
+                        ],
+                    })
+                    .expect("watched files registration options should serialize"),
+                ),
+            }],
+        };
+
+        let mut client = self.client.clone();
+        tokio::spawn(async move {
+            let _ = client
+                .register_capability(params)
+                .await
+                .inspect_err(|err| tracing::warn!("failed to register file watchers: {err}"));
+        });
+    }
+
     /// Resolve goto-definition for the link under `position` in `uri`. Same-file
     /// `#id` links and cross-file `path#id` links are handled uniformly through
     /// the workspace index; a cross-file target not yet indexed is loaded from

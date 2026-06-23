@@ -10,6 +10,11 @@ pub(crate) struct ClientWorkspaceEditCapabilities {
     pub(crate) rename_resource_operation: bool,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct ClientFileWatchCapabilities {
+    pub(crate) dynamic_registration: bool,
+}
+
 pub(crate) fn is_valid_anchor_id(id: &str) -> bool {
     !id.is_empty() && !id.contains('#') && !id.chars().any(char::is_whitespace)
 }
@@ -113,5 +118,19 @@ pub(crate) fn client_workspace_edit_capabilities(
             .resource_operations
             .as_ref()
             .is_some_and(|operations| operations.contains(&ResourceOperationKind::Rename)),
+    }
+}
+
+pub(crate) fn client_file_watch_capabilities(
+    params: &InitializeParams,
+) -> ClientFileWatchCapabilities {
+    ClientFileWatchCapabilities {
+        dynamic_registration: params
+            .capabilities
+            .workspace
+            .as_ref()
+            .and_then(|workspace| workspace.did_change_watched_files)
+            .and_then(|capabilities| capabilities.dynamic_registration)
+            == Some(true),
     }
 }

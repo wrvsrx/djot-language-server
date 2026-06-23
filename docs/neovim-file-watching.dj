@@ -82,10 +82,11 @@ vim.lsp.config('djot-language-server', {
 })
 ```
 
-This only tells the server that the client supports dynamic registration. The
-server must still send `client/registerCapability` for
-`workspace/didChangeWatchedFiles` with concrete watcher globs before Neovim will
-start watching files.
+This only tells the server that the client supports dynamic registration.
+`djot-ls` sends `client/registerCapability` for
+`workspace/didChangeWatchedFiles` with concrete watcher globs when that client
+capability is present; Neovim starts watching files after accepting that
+registration.
 
 For `djot-ls`, useful watcher globs would be narrow, such as `**/*.dj` and
 `**/*.djot`. Narrow globs reduce the risk compared with general-purpose
@@ -96,18 +97,19 @@ Installing `inotifywait` changes Neovim's Linux backend choice. Without it,
 Neovim falls back to recursively watching directories through libuv handles.
 Both paths are best treated as opt-in on Linux.
 
-# Recommendation for djot-ls
+# Current djot-ls behavior and recommendation
 
 Do not make correctness depend on Neovim sending
 `workspace/didChangeWatchedFiles` on Linux.
 
-Prefer this layering:
+Current behavior:
 
-- Add a `workspace/didChangeWatchedFiles` notification handler in `djot-ls`, so
-  clients that do send file events can trigger targeted re-indexing. This
-  handler is also required if `djot-ls` ever advertises or registers a related
-  capability, because async-lsp's omni-trait default handler can terminate the
-  server for unimplemented standard notifications.
+- `djot-ls` handles `workspace/didChangeWatchedFiles` notifications, so clients
+  that send file events trigger targeted re-indexing for created, changed, and
+  deleted `.dj` / `.djot` files.
+- When the client advertises
+  `workspace.didChangeWatchedFiles.dynamicRegistration`, `djot-ls` dynamically
+  registers narrow watcher globs: `**/*.dj` and `**/*.djot`.
 - Keep opened-buffer updates driven by `didOpen`, `didChange`, `didClose`, and
   `didSave`; these are reliable in Neovim.
 - For reliable external workspace updates on Linux, consider a server-side

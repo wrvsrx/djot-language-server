@@ -38,9 +38,21 @@ fn parse_frames(mut data: &[u8]) -> Vec<Value> {
 /// Spawn the built binary, feed it the given JSON-RPC messages over stdio, and
 /// return the parsed responses it writes back.
 pub fn run_session(msgs: &[Value]) -> Vec<Value> {
+    run_session_with_pause(msgs, &[], std::time::Duration::ZERO)
+}
+
+pub fn run_session_with_pause(
+    first_msgs: &[Value],
+    second_msgs: &[Value],
+    pause: std::time::Duration,
+) -> Vec<Value> {
     let mut payload = Vec::new();
-    for m in msgs {
+    for m in first_msgs {
         payload.extend_from_slice(&frame(m));
+    }
+    let mut second_payload = Vec::new();
+    for m in second_msgs {
+        second_payload.extend_from_slice(&frame(m));
     }
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_djot-ls"))
@@ -51,7 +63,13 @@ pub fn run_session(msgs: &[Value]) -> Vec<Value> {
         .unwrap();
 
     // The payload is tiny, so writing it all before reading cannot deadlock.
-    child.stdin.take().unwrap().write_all(&payload).unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    stdin.write_all(&payload).unwrap();
+    if !pause.is_zero() {
+        std::thread::sleep(pause);
+    }
+    stdin.write_all(&second_payload).unwrap();
+    drop(stdin);
     let mut out = Vec::new();
     child.stdout.take().unwrap().read_to_end(&mut out).unwrap();
     child.wait().unwrap();
