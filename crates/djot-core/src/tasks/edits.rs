@@ -1,85 +1,17 @@
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
-use std::path::PathBuf;
 
-use chrono::{DateTime, Datelike, Duration, FixedOffset, SecondsFormat, TimeZone, Timelike};
-use iso8601_duration::Duration as IsoDuration;
+use chrono::{DateTime, FixedOffset, SecondsFormat};
 use jotdown::{Container, Event, Parser};
 
-use crate::{analyze, AnalysisDiagnostic, Anchor, DiagnosticKind, RefTarget, TextEdit};
+use crate::{analyze, Anchor, TextEdit};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Task {
-    pub range: Range<usize>,
-    pub title_range: Option<Range<usize>>,
-    pub title: String,
-    pub depth: usize,
-    pub id: Option<String>,
-    pub created: Option<String>,
-    pub done: Option<String>,
-    pub canceled: Option<String>,
-    pub due: Option<String>,
-    pub wait: Option<String>,
-    pub recur: Option<String>,
-    pub prev: Option<String>,
-    pub depends: Vec<TaskDependency>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TaskDependency {
-    pub source: String,
-    pub range: Range<usize>,
-    pub target: RefTarget,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TaskStatusEdit {
-    pub edits: Vec<TextEdit>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TaskStatus {
-    Done,
-    Canceled,
-}
-
-impl TaskStatus {
-    fn attribute(self) -> &'static str {
-        match self {
-            Self::Done => "done",
-            Self::Canceled => "canceled",
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TaskEditError {
-    TaskIdNotFound { id: String },
-    TaskAlreadyDone { id: String },
-    TaskCanceled { id: String },
-    CannotBuildEdit { id: String },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct TaskRef {
-    pub path: PathBuf,
-    pub id: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ResolvedTaskDependency {
-    pub source: String,
-    pub target: TaskRef,
-    pub task: Task,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RepeatRule {
-    Days(i64),
-    Weeks(i64),
-    Months(i32),
-    Years(i32),
-}
+use super::attributes::{
+    anchor_attribute, escape_attribute_value, filter_recurring_instance_attributes, leading_indent,
+    line_bounds,
+};
+use super::model::{Task, TaskEditError, TaskStatus, TaskStatusEdit};
+use super::recurrence::next_recur_due;
 
 pub fn task_list_item_conversion_edit(
     text: &str,
@@ -257,41 +189,6 @@ fn recurring_task_status_edits(
             next_edit,
         ],
     })
-}
-
-pub(crate) fn document_local_task_diagnostics(tasks: &[Task]) -> Vec<AnalysisDiagnostic> {
-    let mut diagnostics = Vec::new();
-
-    for task in tasks {
-        if task.done.is_some() && task.canceled.is_some() {
-            diagnostics.push(AnalysisDiagnostic {
-                range: task.range.clone(),
-                kind: DiagnosticKind::ConflictingTaskClosedState,
-            });
-        }
-
-        let Some(recur) = task.recur.as_deref() else {
-            continue;
-        };
-
-        if parse_repeat_rule(recur).is_none() {
-            diagnostics.push(AnalysisDiagnostic {
-                range: task.range.clone(),
-                kind: DiagnosticKind::InvalidTaskRecur {
-                    recur: recur.to_string(),
-                },
-            });
-        }
-
-        if task.due.is_none() {
-            diagnostics.push(AnalysisDiagnostic {
-                range: task.range.clone(),
-                kind: DiagnosticKind::MissingTaskDueForRecur,
-            });
-        }
-    }
-
-    diagnostics
 }
 
 struct ListTaskContext<'a> {
@@ -477,156 +374,6 @@ fn inherited_task_source(source: &str, indent: &str) -> String {
     filter_recurring_instance_attributes(&ensure_block_indent(source, indent))
 }
 
-pub(crate) fn filter_recurring_instance_attributes(source: &str) -> String {
-    let mut out = String::new();
-    for line in source.split_inclusive('\n') {
-        match filter_recurring_attribute_line(line) {
-            AttributeLineFilter::Keep(line) => out.push_str(line),
-            AttributeLineFilter::Replace(line) => out.push_str(&line),
-            AttributeLineFilter::Drop => {}
-        }
-    }
-    out
-}
-
-enum AttributeLineFilter<'a> {
-    Keep(&'a str),
-    Replace(String),
-    Drop,
-}
-
-fn filter_recurring_attribute_line(line: &str) -> AttributeLineFilter<'_> {
-    let line_without_newline = line.trim_end_matches(['\r', '\n']);
-    let newline = &line[line_without_newline.len()..];
-    let indent = leading_indent(line_without_newline);
-    let content = &line_without_newline[indent.len()..];
-    let Some(inner) = content.strip_prefix('{').and_then(|s| s.strip_suffix('}')) else {
-        return AttributeLineFilter::Keep(line);
-    };
-
-    let Some(tokens) = attribute_tokens(inner) else {
-        return AttributeLineFilter::Keep(line);
-    };
-    if tokens.is_empty() {
-        return AttributeLineFilter::Keep(line);
-    }
-
-    let kept = tokens
-        .iter()
-        .filter(|token| !is_recurring_instance_attribute(token))
-        .collect::<Vec<_>>();
-    if kept.len() == tokens.len() {
-        return AttributeLineFilter::Keep(line);
-    }
-    if kept.is_empty() {
-        return AttributeLineFilter::Drop;
-    }
-
-    let mut replacement = String::new();
-    replacement.push_str(indent);
-    replacement.push('{');
-    for (idx, token) in kept.iter().enumerate() {
-        if idx > 0 {
-            replacement.push(' ');
-        }
-        replacement.push_str(token);
-    }
-    replacement.push('}');
-    replacement.push_str(newline);
-    AttributeLineFilter::Replace(replacement)
-}
-
-fn attribute_tokens(inner: &str) -> Option<Vec<&str>> {
-    let mut tokens = Vec::new();
-    let mut start = None;
-    let mut quote = None;
-    let mut escaped = false;
-
-    for (idx, ch) in inner.char_indices() {
-        if start.is_none() {
-            if ch.is_whitespace() {
-                continue;
-            }
-            start = Some(idx);
-        }
-
-        if let Some(quoted) = quote {
-            if escaped {
-                escaped = false;
-            } else if ch == '\\' {
-                escaped = true;
-            } else if ch == quoted {
-                quote = None;
-            }
-            continue;
-        }
-
-        if ch == '"' || ch == '\'' {
-            quote = Some(ch);
-        } else if ch.is_whitespace() {
-            if let Some(token_start) = start.take() {
-                tokens.push(inner[token_start..idx].trim());
-            }
-        }
-    }
-
-    if quote.is_some() {
-        return None;
-    }
-    if let Some(token_start) = start {
-        tokens.push(inner[token_start..].trim());
-    }
-
-    Some(
-        tokens
-            .into_iter()
-            .filter(|token| !token.is_empty())
-            .collect(),
-    )
-}
-
-fn is_recurring_instance_attribute(token: &str) -> bool {
-    if token.starts_with('#') {
-        return true;
-    }
-    let key = token.split_once('=').map_or(token, |(key, _)| key);
-    matches!(
-        key,
-        "id" | "created" | "done" | "canceled" | "due" | "wait" | "recur" | "prev"
-    )
-}
-
-pub fn next_recur_due(due: DateTime<FixedOffset>, recur: &str) -> Option<DateTime<FixedOffset>> {
-    let rule = parse_repeat_rule(recur)?;
-    match rule {
-        RepeatRule::Days(days) => Some(due + Duration::days(days)),
-        RepeatRule::Weeks(weeks) => Some(due + Duration::weeks(weeks)),
-        RepeatRule::Months(months) => add_months(due, months),
-        RepeatRule::Years(years) => add_months(due, years.checked_mul(12)?),
-    }
-}
-
-fn add_months(due: DateTime<FixedOffset>, months: i32) -> Option<DateTime<FixedOffset>> {
-    let month0 = due.month0() as i32 + months;
-    let year = due.year() + month0.div_euclid(12);
-    let month0 = month0.rem_euclid(12);
-    let month = (month0 + 1) as u32;
-    let day = due.day().min(last_day_of_month(year, month)?);
-    due.timezone()
-        .with_ymd_and_hms(year, month, day, due.hour(), due.minute(), due.second())
-        .single()
-}
-
-fn last_day_of_month(year: i32, month: u32) -> Option<u32> {
-    let (next_year, next_month) = if month == 12 {
-        (year + 1, 1)
-    } else {
-        (year, month + 1)
-    };
-    let first_next = chrono::NaiveDate::from_ymd_opt(next_year, next_month, 1)?;
-    Some((first_next - Duration::days(1)).day())
-}
-
 fn task_instance_id(
     title: &str,
     due: DateTime<FixedOffset>,
@@ -663,34 +410,6 @@ fn unique_anchor_id(
         }
         count += 1;
     }
-}
-
-pub(crate) fn leading_indent(line: &str) -> &str {
-    let indent_len = line
-        .char_indices()
-        .find(|(_, c)| *c != ' ' && *c != '\t')
-        .map(|(i, _)| i)
-        .unwrap_or(line.len());
-    &line[..indent_len]
-}
-
-fn escape_attribute_value(value: &str) -> String {
-    value.replace('\\', "\\\\").replace('"', "\\\"")
-}
-
-pub(crate) fn anchor_attribute(id: &str) -> String {
-    if is_shorthand_anchor_id(id) {
-        format!("{{#{id}}}")
-    } else {
-        format!("{{id=\"{}\"}}", escape_attribute_value(id))
-    }
-}
-
-fn is_shorthand_anchor_id(id: &str) -> bool {
-    !id.is_empty()
-        && id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b':' | b'_' | b'-'))
 }
 
 struct TaskOpeningFence {
@@ -745,64 +464,4 @@ fn task_opening_fence_from_line(line_start: usize, line: &str) -> Option<TaskOpe
         fence_prefix: format!("{indent}  "),
         task_indent: format!("{indent}  "),
     })
-}
-
-pub(crate) fn line_bounds(text: &str, offset: usize) -> Option<(usize, usize)> {
-    if offset > text.len() {
-        return None;
-    }
-    let start = text[..offset].rfind('\n').map_or(0, |i| i + 1);
-    let end = text[offset..].find('\n').map_or(text.len(), |i| offset + i);
-    Some((start, end))
-}
-
-pub fn parse_repeat_rule(recur: &str) -> Option<RepeatRule> {
-    let duration: IsoDuration = recur.parse().ok()?;
-    let units = [
-        duration.year,
-        duration.month,
-        duration.day,
-        duration.hour,
-        duration.minute,
-        duration.second,
-    ];
-    if units.iter().filter(|value| **value > 0.0).count() != 1 {
-        return None;
-    }
-    if duration.hour > 0.0 || duration.minute > 0.0 || duration.second > 0.0 {
-        return None;
-    }
-    if duration.year > 0.0 {
-        return integer_f32(duration.year).and_then(|years| {
-            i32::try_from(years)
-                .ok()
-                .filter(|years| *years > 0)
-                .map(RepeatRule::Years)
-        });
-    }
-    if duration.month > 0.0 {
-        return integer_f32(duration.month).and_then(|months| {
-            i32::try_from(months)
-                .ok()
-                .filter(|months| *months > 0)
-                .map(RepeatRule::Months)
-        });
-    }
-    integer_f32(duration.day).and_then(|days| {
-        if days > 0 && days % 7 == 0 {
-            Some(RepeatRule::Weeks(days / 7))
-        } else if days > 0 {
-            Some(RepeatRule::Days(days))
-        } else {
-            None
-        }
-    })
-}
-
-fn integer_f32(value: f32) -> Option<i64> {
-    if value.fract() == 0.0 && value <= i64::MAX as f32 {
-        Some(value as i64)
-    } else {
-        None
-    }
 }
