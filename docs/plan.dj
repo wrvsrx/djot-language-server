@@ -127,7 +127,7 @@ Current `djot-filter` usage and query context are documented in
 
   - [x] `djot-ls`: split workspace indexing, diagnostics publication,
     path/symbol helpers, and byte/UTF-16 position conversion out of `main.rs`.
-  - [ ] `djot-ls`: split `ServerState` request/notification handlers out of
+  - [x] `djot-ls`: split `ServerState` request/notification handlers out of
     `main.rs` once the helper module boundaries settle.
   - [ ] `djot-core`: split the large root test module into focused test files
     for analysis, workspace behavior, rename, and task editing.
