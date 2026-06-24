@@ -176,6 +176,18 @@ fn task_list_item_conversion_edit_converts_open_native_task() {
 }
 
 #[test]
+fn task_list_item_conversion_edit_converts_unicode_native_task() {
+    let text = "- [ ] 中文\n";
+    let edit = task_list_item_conversion_edit(text, text.find("中文").unwrap(), "created").unwrap();
+
+    assert_eq!(&text[edit.range.clone()], "- [ ] 中文");
+    assert_eq!(
+        edit.new_text,
+        "- {created=\"created\"}\n  ::: task\n  中文\n  :::"
+    );
+}
+
+#[test]
 fn task_list_item_conversion_edit_preserves_native_task_body() {
     let text = "- [ ] something\n\n  a paragraph\n\n  a paragraph\n";
     let edit =

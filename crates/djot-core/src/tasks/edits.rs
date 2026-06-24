@@ -65,10 +65,14 @@ fn native_task_list_item_body(
 }
 
 fn trim_trailing_line_ending(text: &str, end: usize, min: usize) -> Option<usize> {
+    if end > text.len() {
+        return None;
+    }
+    let bytes = text.as_bytes();
     let mut end = end;
-    if end > min && text.get(end - 1..end)? == "\n" {
+    if end > min && bytes.get(end - 1) == Some(&b'\n') {
         end -= 1;
-        if end > min && text.get(end - 1..end)? == "\r" {
+        if end > min && bytes.get(end - 1) == Some(&b'\r') {
             end -= 1;
         }
     }
