@@ -150,6 +150,22 @@ Current `djot-filter` usage and query context are documented in
     task attribute helpers out of `tasks.rs` if task CLI/editor actions keep
     growing.
 
+- [ ] Add a lossless source-map layer for edit-sensitive Djot syntax:
+
+  - Keep jotdown as the structural Djot parser for now, but make its event
+    stream an implementation detail behind `djot-core` analysis APIs.
+  - Centralize the hand-written source scans that recover exact byte ranges for
+    attribute ids/values, link destination subranges, task fences, list context,
+    and incomplete completion syntax.
+  - Store explicit source ranges for semantic fields that LSP and CLI edits
+    need, such as anchor ids, task metadata attributes, dependency tokens,
+    link paths, and link fragments.
+  - Prefer replacing ad hoc `find`-style range recovery with a small
+    source-map model that maps parsed semantic values back to their original
+    source tokens.
+  - Revisit a jotdown fork or replacement only if the source-map layer keeps
+    depending on parser internals that jotdown cannot expose cleanly.
+
 - [ ] Defer disk-backed analysis caching until parsing shows up as a real
   bottleneck. If added, keep the cache limited to saved on-disk files and let
   `djot-ls` maintain unsaved buffer state only in memory.
