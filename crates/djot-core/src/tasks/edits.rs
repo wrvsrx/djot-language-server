@@ -18,7 +18,13 @@ pub fn task_list_item_conversion_edit(
     offset: usize,
     created: &str,
 ) -> Option<TextEdit> {
-    let (line_start, line_end) = line_bounds(text, offset)?;
+    let analysis = analyze(text);
+    let task = analysis
+        .native_task_list_items
+        .iter()
+        .filter(|task| !task.checked && task.range.start <= offset && offset <= task.range.end)
+        .max_by_key(|task| task.range.start)?;
+    let (line_start, line_end) = line_bounds(text, task.range.start)?;
     let line = text.get(line_start..line_end)?;
     let content = line.strip_suffix('\r').unwrap_or(line);
     let indent = leading_indent(content);
@@ -28,12 +34,45 @@ pub fn task_list_item_conversion_edit(
         return None;
     }
 
+    let range_end = trim_trailing_line_ending(text, task.range.end, task.range.start)?;
+    let task_indent = format!("{indent}  ");
+    let body = native_task_list_item_body(text, line_end, range_end, title, &task_indent)?;
+
     Some(TextEdit {
-        range: line_start..line_end,
-        new_text: format!(
-            "{indent}- {{created=\"{created}\"}}\n{indent}  ::: task\n{indent}  {title}\n{indent}  :::"
-        ),
+        range: line_start..range_end,
+        new_text: format!("{indent}- {{created=\"{created}\"}}\n{task_indent}::: task\n{body}"),
     })
+}
+
+fn native_task_list_item_body(
+    text: &str,
+    first_line_end: usize,
+    range_end: usize,
+    title: &str,
+    task_indent: &str,
+) -> Option<String> {
+    let continuation = text.get(first_line_end..range_end)?;
+    let mut body = String::new();
+    body.push_str(task_indent);
+    body.push_str(title);
+    body.push_str(continuation);
+    if !body.ends_with('\n') {
+        body.push('\n');
+    }
+    body.push_str(task_indent);
+    body.push_str(":::");
+    Some(body)
+}
+
+fn trim_trailing_line_ending(text: &str, end: usize, min: usize) -> Option<usize> {
+    let mut end = end;
+    if end > min && text.get(end - 1..end)? == "\n" {
+        end -= 1;
+        if end > min && text.get(end - 1..end)? == "\r" {
+            end -= 1;
+        }
+    }
+    Some(end)
 }
 
 pub fn task_status_edits_at(

@@ -176,6 +176,19 @@ fn task_list_item_conversion_edit_converts_open_native_task() {
 }
 
 #[test]
+fn task_list_item_conversion_edit_preserves_native_task_body() {
+    let text = "- [ ] something\n\n  a paragraph\n\n  a paragraph\n";
+    let edit =
+        task_list_item_conversion_edit(text, text.find("something").unwrap(), "created").unwrap();
+
+    assert_eq!(&text[edit.range.clone()], text.trim_end_matches('\n'));
+    assert_eq!(
+        edit.new_text,
+        "- {created=\"created\"}\n  ::: task\n  something\n\n  a paragraph\n\n  a paragraph\n  :::"
+    );
+}
+
+#[test]
 fn repeat_rule_accepts_supported_iso_duration_subset() {
     assert_eq!(parse_repeat_rule("P1D"), Some(RepeatRule::Days(1)));
     assert_eq!(parse_repeat_rule("P2W"), Some(RepeatRule::Weeks(2)));
