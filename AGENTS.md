@@ -87,9 +87,12 @@ suite before the final implementation commit. Use concise conventional-style mes
 for documentation-only changes unless the surrounding history clearly uses a
 more specific docs scope.
 
-After the user confirms the completed branch, merge it into `main` using a
-normal non-destructive merge workflow. Check `git status --short` before and
-after the merge, and do not include unrelated user changes in the merge commit.
+After the user confirms the completed branch, integrate it into `main` with a
+linear history unless the user explicitly asks for a merge commit. Prefer
+rebasing the topic branch onto the current `main` and fast-forwarding `main`, or
+rebasing `main` after an unpushed accidental merge. Check `git status --short`
+before and after the integration, and do not include unrelated user changes in
+the integrated commits.
 
 ## Release workflow
 
