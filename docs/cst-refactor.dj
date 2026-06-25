@@ -152,12 +152,17 @@ review after Slice 1.
   unified into shared `target_path_range` / `target_id_range`. Removed
   `reference_id_range` / `reference_target_search_start` whole-source `find()`s.
 
-- [ ] **Slice 4 (optional, later) --- invert control + extraction seam.** Have
-  `analyze()` iterate Layer A's enriched node stream rather than calling
-  `jotdown::Parser` directly, isolating jotdown behind `cst`. This is where `cst`
-  could move to a `crates/djot-syntax` crate, and where an error-tolerant parse
-  could give `completion.rs`'s incomplete-link scanner a home inside the CST. Not
-  required for the bug fix; flagged so earlier slices keep the boundary clean.
+- [x] **Slice 4 --- invert control + extraction seam.** `cst::parse` now owns
+  the jotdown walk and emits a cst event stream (`Event`/`Container`/`Attributes`,
+  owned and parser-agnostic); `heading_outline` and `analyze` consume it, and the
+  attribute helpers/references take `cst::Attributes`. `cst::heading_id`,
+  `cst::closed_link_at`, and `cst::plain_str_at` cover the remaining direct
+  jotdown uses (title slugging, completion's link/text cursor queries). Result:
+  no source outside the `cst` module names jotdown, and only `djot-core` (via
+  `cst`) depends on the crate — `djot-ls` and `djot-filter` dropped it. This is
+  the seam for an eventual standalone `djot-syntax` crate and a future
+  error-tolerant parse that could fold in `completion.rs`'s incomplete-link
+  scanner.
 
 ## Critical files
 
