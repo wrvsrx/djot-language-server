@@ -5,6 +5,7 @@ use jotdown::Attributes;
 use serde::{Deserialize, Serialize};
 
 use crate::analysis::attribute_value_range;
+use crate::cst::link_syntax;
 use crate::paths::{is_djot_path, normalize, percent_decode_path};
 use crate::tasks::TaskDependency;
 
@@ -89,29 +90,13 @@ pub fn resolve_target(from: &Path, target: &RefTarget) -> Option<ResolvedTarget>
     }
 }
 
-fn reference_id_range(text: &str, range: &Range<usize>, id: &str) -> Option<Range<usize>> {
-    let source = text.get(range.clone())?;
-    let needle = format!("#{id}");
-    let search_start = reference_target_search_start(source);
-    let start = source.get(search_start..)?.find(&needle)? + search_start + 1;
-    Some(range.start + start..range.start + start + id.len())
-}
-
-fn reference_target_search_start(source: &str) -> usize {
-    source.rfind("](").map_or(0, |start| start + 2)
-}
-
 pub(crate) fn reference_target_id_range(
     text: &str,
     source: &Range<usize>,
     target: &RefTarget,
 ) -> Option<Range<usize>> {
-    let id = match target {
-        RefTarget::Internal { id } => id,
-        RefTarget::External { id: Some(id), .. } => id,
-        RefTarget::External { id: None, .. } | RefTarget::Url(_) => return None,
-    };
-    reference_id_range(text, source, id)
+    let dst = link_syntax(text, source)?.dst_range;
+    target_id_range(text.get(dst.clone())?, &dst, target)
 }
 
 pub(crate) fn reference_target_path_range(
@@ -119,17 +104,8 @@ pub(crate) fn reference_target_path_range(
     source: &Range<usize>,
     target: &RefTarget,
 ) -> Option<Range<usize>> {
-    let path = match target {
-        RefTarget::External { path, .. } => path,
-        RefTarget::Internal { .. } | RefTarget::Url(_) => return None,
-    };
-    if path.is_empty() {
-        return None;
-    }
-    let source_text = text.get(source.clone())?;
-    let search_start = reference_target_search_start(source_text);
-    let start = source_text.get(search_start..)?.find(path)? + search_start;
-    Some(source.start + start..source.start + start + path.len())
+    let dst = link_syntax(text, source)?.dst_range;
+    target_path_range(text.get(dst.clone())?, &dst, target)
 }
 
 pub(crate) fn task_prev_reference(
@@ -146,8 +122,8 @@ pub(crate) fn task_prev_reference(
     }
 
     let source = attribute_value_range(text, span, "prev", &prev)?;
-    let target_path_range = task_reference_path_range(&prev, &source, &target);
-    let target_id_range = task_reference_id_range(&prev, &source, &target);
+    let target_path_range = target_path_range(&prev, &source, &target);
+    let target_id_range = target_id_range(&prev, &source, &target);
     Some(Reference {
         source,
         target_path_range,
@@ -238,49 +214,52 @@ fn parse_task_reference_target(source: &str) -> RefTarget {
     }
 }
 
-fn task_reference_path_range(
-    source: &str,
+/// Byte range of the path portion of a target value (`path` of `path#id`),
+/// given the value text and its source span. Shared by inline links and task
+/// references — the `#` split is the djot-undefined `path#anchor` convention,
+/// applied to a span the CST already delimited.
+fn target_path_range(
+    value: &str,
     range: &Range<usize>,
     target: &RefTarget,
 ) -> Option<Range<usize>> {
     match target {
-        RefTarget::External { .. } => {
-            let hash = source.find('#')?;
-            if hash == 0 {
-                None
-            } else {
-                Some(range.start..range.start + hash)
+        RefTarget::External { path, .. } => {
+            if path.is_empty() {
+                return None;
+            }
+            match value.find('#') {
+                Some(0) => None,
+                Some(hash) => Some(range.start..range.start + hash),
+                None => Some(range.clone()),
             }
         }
         RefTarget::Internal { .. } | RefTarget::Url(_) => None,
     }
 }
 
-fn task_reference_id_range(
-    source: &str,
-    range: &Range<usize>,
-    target: &RefTarget,
-) -> Option<Range<usize>> {
+/// Byte range of the anchor id portion of a target value (`id` of `path#id` or
+/// `#id`), given the value text and its source span.
+fn target_id_range(value: &str, range: &Range<usize>, target: &RefTarget) -> Option<Range<usize>> {
     match target {
         RefTarget::Internal { .. } => {
-            let start = range.start + source.strip_prefix('#').map_or(0, |_| '#'.len_utf8());
+            let start = range.start + value.strip_prefix('#').map_or(0, |_| '#'.len_utf8());
             Some(start..range.end)
         }
-        RefTarget::External { .. } => {
-            let hash = source.find('#')?;
-            let start = range.start + hash + '#'.len_utf8();
-            Some(start..range.end)
+        RefTarget::External { id: Some(_), .. } => {
+            let hash = value.find('#')?;
+            Some(range.start + hash + '#'.len_utf8()..range.end)
         }
-        RefTarget::Url(_) => None,
+        RefTarget::External { id: None, .. } | RefTarget::Url(_) => None,
     }
 }
 
 fn dependency_target_path_range(dependency: &TaskDependency) -> Option<Range<usize>> {
-    task_reference_path_range(&dependency.source, &dependency.range, &dependency.target)
+    target_path_range(&dependency.source, &dependency.range, &dependency.target)
 }
 
 fn dependency_target_id_range(dependency: &TaskDependency) -> Option<Range<usize>> {
-    task_reference_id_range(&dependency.source, &dependency.range, &dependency.target)
+    target_id_range(&dependency.source, &dependency.range, &dependency.target)
 }
 
 pub(crate) fn is_diagnostic_target(target: &RefTarget) -> bool {

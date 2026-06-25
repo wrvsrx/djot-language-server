@@ -367,6 +367,40 @@ pub(crate) fn is_attr_name_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || matches!(byte, b':' | b'_' | b'-')
 }
 
+// ---- Links -----------------------------------------------------------------
+
+/// Syntactic spans within an inline link `[label](destination)`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkSyntax {
+    /// Byte span of the destination text inside the parentheses, with any
+    /// `<...>` angle brackets stripped.
+    pub dst_range: Range<usize>,
+}
+
+/// Locate the destination span of the inline link covering `link_span`.
+///
+/// Returns `None` for reference/collapsed/autolink forms that carry no inline
+/// `](destination)`, where the destination is not present at the link site.
+pub fn link_syntax(text: &str, link_span: &Range<usize>) -> Option<LinkSyntax> {
+    let source = text.get(link_span.clone())?;
+    let open = source.rfind("](")?;
+    let dst_rel = open + "](".len();
+    let close_rel = dst_rel + source.get(dst_rel..)?.rfind(')')?;
+    let mut start = link_span.start + dst_rel;
+    let mut end = link_span.start + close_rel;
+    if end < start {
+        return None;
+    }
+    let bytes = text.as_bytes();
+    if end > start && bytes.get(start) == Some(&b'<') && bytes.get(end - 1) == Some(&b'>') {
+        start += 1;
+        end -= 1;
+    }
+    Some(LinkSyntax {
+        dst_range: start..end,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -433,5 +467,21 @@ mod tests {
         let fence = div_fence(text, &(0..text.len())).unwrap();
         assert_eq!(&text[fence.fence_range.clone()], ":::: task");
         assert_eq!(fence.attribute_insert, 0..0);
+    }
+
+    #[test]
+    fn link_syntax_finds_destination_and_strips_angle_brackets() {
+        let text = "see [the label](dir/file.dj#sec) here";
+        let span = text.find('[').unwrap()..text.find(')').unwrap() + 1;
+        let link = link_syntax(text, &span).unwrap();
+        assert_eq!(&text[link.dst_range.clone()], "dir/file.dj#sec");
+
+        let angled = "[x](<a b.dj>)";
+        let link = link_syntax(angled, &(0..angled.len())).unwrap();
+        assert_eq!(&angled[link.dst_range], "a b.dj");
+
+        // Reference-style links carry no inline destination.
+        let reference = "[x][ref]";
+        assert_eq!(link_syntax(reference, &(0..reference.len())), None);
     }
 }
