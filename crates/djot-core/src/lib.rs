@@ -6,6 +6,7 @@
 //! (pandoc) convert at their own boundary - this crate never depends on those.
 
 mod analysis;
+mod cst;
 mod diagnostics;
 mod edits;
 mod paths;

@@ -1,11 +1,4 @@
-pub(crate) fn leading_indent(line: &str) -> &str {
-    let indent_len = line
-        .char_indices()
-        .find(|(_, c)| *c != ' ' && *c != '\t')
-        .map(|(i, _)| i)
-        .unwrap_or(line.len());
-    &line[..indent_len]
-}
+use crate::cst::leading_indent;
 
 pub(crate) fn escape_attribute_value(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
@@ -143,13 +136,4 @@ fn is_recurring_instance_attribute(token: &str) -> bool {
         key,
         "id" | "created" | "done" | "canceled" | "due" | "wait" | "recur" | "prev"
     )
-}
-
-pub(crate) fn line_bounds(text: &str, offset: usize) -> Option<(usize, usize)> {
-    if offset > text.len() {
-        return None;
-    }
-    let start = text[..offset].rfind('\n').map_or(0, |i| i + 1);
-    let end = text[offset..].find('\n').map_or(text.len(), |i| offset + i);
-    Some((start, end))
 }

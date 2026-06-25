@@ -1,14 +1,13 @@
 use std::collections::{HashMap, HashSet};
-use std::ops::Range;
 
 use chrono::{DateTime, FixedOffset, SecondsFormat};
 use jotdown::{Container, Event, Parser};
 
+use crate::cst::{leading_indent, line_bounds, next_line_start, previous_line_start};
 use crate::{analyze, Anchor, TextEdit};
 
 use super::attributes::{
-    anchor_attribute, escape_attribute_value, filter_recurring_instance_attributes, leading_indent,
-    line_bounds,
+    anchor_attribute, escape_attribute_value, filter_recurring_instance_attributes,
 };
 use super::model::{Task, TaskEditError, TaskStatus, TaskStatusEdit};
 use super::recurrence::next_recur_due;
@@ -132,18 +131,17 @@ fn task_status_edits_for_task(
     if task.recur.is_some() && task.due.is_some() {
         recurring_task_status_edits(text, task, status, timestamp, allow_generated_current_id)
     } else {
-        simple_task_status_edits(text, task, status, timestamp)
+        simple_task_status_edits(task, status, timestamp)
     }
 }
 
 fn simple_task_status_edits(
-    text: &str,
     task: &Task,
     status: TaskStatus,
     timestamp: &str,
 ) -> Option<TaskStatusEdit> {
     let attribute = status.attribute();
-    let opening = task_opening_fence(text, &task.range)?;
+    let opening = task.fence.as_ref()?;
     Some(TaskStatusEdit {
         edits: vec![TextEdit {
             range: opening.attribute_insert.clone(),
@@ -171,8 +169,8 @@ fn recurring_task_status_edits(
         .as_deref()
         .and_then(|wait| DateTime::parse_from_rfc3339(wait).ok())
         .and_then(|wait| next_recur_due(wait, recur));
-    let opening = task_opening_fence(text, &task.range)?;
-    let indent = opening.task_indent.as_str();
+    let opening = task.fence.as_ref()?;
+    let indent = opening.indent.as_str();
 
     let anchors = analyze(text).index.anchors;
     let mut reserved = HashSet::new();
@@ -198,7 +196,8 @@ fn recurring_task_status_edits(
     let current_id_attribute = anchor_attribute(&current_id);
     let next_id_attribute = anchor_attribute(&next_id);
     let div = inherited_task_source(text.get(task.range.clone())?, indent);
-    let list_item = single_task_list_item_context(text, opening.line_start, task.range.end, indent);
+    let list_item =
+        single_task_list_item_context(text, opening.fence_range.start, task.range.end, indent);
 
     let mut status_text = String::new();
     let mut attribute_prefix = opening.attribute_prefix.as_str();
@@ -231,7 +230,7 @@ fn recurring_task_status_edits(
     Some(TaskStatusEdit {
         edits: vec![
             TextEdit {
-                range: opening.attribute_insert,
+                range: opening.attribute_insert.clone(),
                 new_text: status_text,
             },
             next_edit,
@@ -409,22 +408,6 @@ fn count_task_fences(text: &str) -> usize {
         .count()
 }
 
-fn previous_line_start(text: &str, line_start: usize) -> Option<usize> {
-    if line_start == 0 {
-        return None;
-    }
-    let previous_end = line_start.checked_sub('\n'.len_utf8())?;
-    Some(text[..previous_end].rfind('\n').map_or(0, |i| i + 1))
-}
-
-fn next_line_start(text: &str, line_end: usize) -> Option<usize> {
-    if line_end >= text.len() {
-        None
-    } else {
-        Some(line_end + '\n'.len_utf8())
-    }
-}
-
 fn ensure_block_indent(block: &str, indent: &str) -> String {
     if indent.is_empty() {
         return block.to_string();
@@ -483,58 +466,4 @@ fn unique_anchor_id(
         }
         count += 1;
     }
-}
-
-struct TaskOpeningFence {
-    line_start: usize,
-    attribute_insert: Range<usize>,
-    attribute_prefix: String,
-    continued_attribute_prefix: String,
-    fence_prefix: String,
-    task_indent: String,
-}
-
-fn task_opening_fence(text: &str, range: &Range<usize>) -> Option<TaskOpeningFence> {
-    let mut offset = range.start;
-    while offset <= range.end {
-        let (line_start, line_end) = line_bounds(text, offset)?;
-        let line = text.get(line_start..line_end)?;
-        if let Some(opening) = task_opening_fence_from_line(line_start, line) {
-            return Some(opening);
-        }
-        if line_end >= range.end || line_end == text.len() {
-            break;
-        }
-        offset = line_end + '\n'.len_utf8();
-    }
-    None
-}
-
-fn task_opening_fence_from_line(line_start: usize, line: &str) -> Option<TaskOpeningFence> {
-    let line = line.strip_suffix('\r').unwrap_or(line);
-    let indent = leading_indent(line);
-    let rest = &line[indent.len()..];
-    if rest.starts_with("::: task") {
-        return Some(TaskOpeningFence {
-            line_start,
-            attribute_insert: line_start..line_start,
-            attribute_prefix: indent.to_string(),
-            continued_attribute_prefix: indent.to_string(),
-            fence_prefix: String::new(),
-            task_indent: indent.to_string(),
-        });
-    }
-
-    let fence = rest.strip_prefix("- ")?;
-    if !fence.starts_with("::: task") {
-        return None;
-    }
-    Some(TaskOpeningFence {
-        line_start,
-        attribute_insert: line_start..line_start + indent.len() + "- ".len(),
-        attribute_prefix: format!("{indent}- "),
-        continued_attribute_prefix: format!("{indent}  "),
-        fence_prefix: format!("{indent}  "),
-        task_indent: format!("{indent}  "),
-    })
 }

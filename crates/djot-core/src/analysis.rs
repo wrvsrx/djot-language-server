@@ -359,7 +359,7 @@ pub fn analyze(text: &str) -> Analysis {
             }
             Event::End(Container::Div { class }) if class == TASK_CLASS => {
                 if let Some(frame) = task_stack.pop() {
-                    tasks.push(frame.into_task(span.end));
+                    tasks.push(frame.into_task(text, span.end));
                 }
             }
             Event::End(Container::ListItem | Container::TaskListItem { .. }) => {
@@ -932,9 +932,12 @@ impl TaskMetadata {
 }
 
 impl TaskFrame {
-    fn into_task(self, range_end: usize) -> Task {
+    fn into_task(self, text: &str, range_end: usize) -> Task {
+        let range = self.range_start..range_end;
+        let fence = crate::cst::div_fence(text, &range);
         Task {
-            range: self.range_start..range_end,
+            range,
+            fence,
             title_range: self.title_range,
             title: self.title.trim().to_string(),
             depth: self.depth,

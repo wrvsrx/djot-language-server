@@ -6,6 +6,10 @@ use crate::{RefTarget, TextEdit};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Task {
     pub range: Range<usize>,
+    /// Opening-fence syntax of the task div, resolved once during analysis so
+    /// status edits never re-scan the source to find the fence. `None` when the
+    /// fence cannot be located (the task is then not status-editable).
+    pub(crate) fence: Option<crate::cst::DivFence>,
     pub title_range: Option<Range<usize>>,
     pub title: String,
     pub depth: usize,

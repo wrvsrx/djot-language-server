@@ -152,6 +152,28 @@ fn task_done_edits_by_id_mark_task_done() {
 }
 
 #[test]
+fn completing_outer_task_from_inside_done_nested_task_marks_outer_fence() {
+    // The outer task uses a 4-colon `:::: task` fence so it nests the inner
+    // `::: task`. The inner task is already done and the cursor sits inside it,
+    // so the only completable task here is the outer one. Locating the fence by
+    // string-matching `::: task` would skip the 4-colon outer fence and write a
+    // second `done` onto the already-done nested task; resolving the fence from
+    // the div's own span marks the outer fence and leaves the nested task alone.
+    let text = "- {created=\"2026-06-25T17:11:29+08:00\"}\n  :::: task\n  a task\n\n  - {created=\"2026-06-25T17:11:39+08:00\"}\n    {done=\"2026-06-25T17:11:47+08:00\"}\n    ::: task\n    a nested task\n    :::\n  ::::\n";
+    let offset = text.find("a nested task").unwrap();
+    let edits =
+        task_status_edits_at(text, offset, TaskStatus::Done, "2026-06-25T18:00:00+08:00").unwrap();
+    let updated = apply_text_edits(text.to_string(), edits.edits).unwrap();
+
+    assert_eq!(
+        updated,
+        "- {created=\"2026-06-25T17:11:29+08:00\"}\n  {done=\"2026-06-25T18:00:00+08:00\"}\n  :::: task\n  a task\n\n  - {created=\"2026-06-25T17:11:39+08:00\"}\n    {done=\"2026-06-25T17:11:47+08:00\"}\n    ::: task\n    a nested task\n    :::\n  ::::\n"
+    );
+    // The nested task keeps exactly its original `done` — no redundant marker.
+    assert_eq!(updated.matches("done=").count(), 2);
+}
+
+#[test]
 fn recurring_list_task_with_trailing_blank_line_creates_next_list_item() {
     let text = "- {#daily created=\"2026-06-24T01:13:36+08:00\"}\n  {recur=\"P1D\"}\n  {due=\"2026-06-24T01:13:45+08:00\"}\n  ::: task\n  a task\n  :::\n\n";
     let edits = task_done_edits_by_id(text, "daily", "2026-06-24T01:14:00+08:00").unwrap();
