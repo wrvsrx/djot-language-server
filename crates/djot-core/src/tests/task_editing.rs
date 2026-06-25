@@ -152,6 +152,31 @@ fn task_done_edits_by_id_mark_task_done() {
 }
 
 #[test]
+fn recurring_next_instance_edit_avoids_trailing_newline() {
+    // File ending in `:::\n`: the next-instance insert must anchor at the end of
+    // the `:::` line (before its newline) with a leading `\n` and no trailing
+    // `\n`. Anchoring past the trailing newline made LSP clients render a phantom
+    // blank line at the end of the buffer.
+    let text = "- {created=\"2026-06-25T19:36:31+08:00\"}\n  {recur=\"P1D\"}\n  {due=\"2026-06-25T19:36:45+08:00\"}\n  ::: task\n  a recur task\n  :::\n";
+    let offset = text.find("a recur task").unwrap();
+    let edits = task_status_edits_at(text, offset, TaskStatus::Done, "2026-06-25T20:00:00+08:00")
+        .unwrap()
+        .edits;
+
+    let next = edits.last().unwrap();
+    assert!(next.new_text.starts_with('\n'));
+    assert!(!next.new_text.ends_with('\n'));
+    assert_eq!(
+        next.range.start,
+        text.find("  :::\n").unwrap() + "  :::".len()
+    );
+
+    let updated = apply_text_edits(text.to_string(), edits).unwrap();
+    assert!(updated.ends_with(":::\n"));
+    assert!(!updated.ends_with(":::\n\n"));
+}
+
+#[test]
 fn completing_outer_task_from_inside_done_nested_task_marks_outer_fence() {
     // The outer task uses a 4-colon `:::: task` fence so it nests the inner
     // `::: task`. The inner task is already done and the cursor sits inside it,

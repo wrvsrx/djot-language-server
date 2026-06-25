@@ -210,14 +210,18 @@ fn recurring_task_status_edits(
     ));
 
     let next_edit = match list_item {
-        Some(context) => TextEdit {
-            range: context.insert..context.insert,
-            new_text: format!(
-                "{separator}{list_indent}- {next_id_attribute}\n{indent}{{created=\"{timestamp}\" due=\"{next_due_text}\"{next_wait_attribute} recur=\"{recur}\" prev=\"#{current_id_text}\"}}\n{div}",
-                separator = context.separator,
+        Some(context) => {
+            let block = format!(
+                "\n{list_indent}- {next_id_attribute}\n{indent}{{created=\"{timestamp}\" due=\"{next_due_text}\"{next_wait_attribute} recur=\"{recur}\" prev=\"#{current_id_text}\"}}\n{div}",
                 list_indent = context.list_indent,
-            ),
-        },
+            );
+            TextEdit {
+                range: context.insert..context.insert,
+                // No trailing newline: the source's own line ending follows the
+                // insert point, so the edit stays on a real line for editors.
+                new_text: block.trim_end_matches('\n').to_string(),
+            }
+        }
         None => TextEdit {
             range: next_insert..next_insert,
             new_text: format!(
@@ -240,7 +244,6 @@ fn recurring_task_status_edits(
 struct ListTaskContext<'a> {
     list_indent: &'a str,
     insert: usize,
-    separator: &'static str,
 }
 
 fn single_task_list_item_context<'a>(
@@ -265,16 +268,14 @@ fn single_task_list_item_context<'a>(
     if count_task_fences(text.get(list_start..list_end)?) != 1 {
         return None;
     }
-    let (insert, separator) = if text.as_bytes().get(task_end_line) == Some(&b'\n') {
-        (task_end_line + 1, "")
-    } else {
-        (task_end_line, "\n")
-    };
-
+    // Anchor at the end of the task's last content line (before its trailing
+    // newline) and prepend the separator there, rather than after the newline.
+    // The byte result is identical, but the edit lands on a real line instead of
+    // the phantom line past a trailing `\n`, which editors would otherwise render
+    // as an extra blank line.
     Some(ListTaskContext {
         list_indent,
-        insert,
-        separator,
+        insert: task_end_line,
     })
 }
 
