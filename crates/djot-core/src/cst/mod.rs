@@ -127,3 +127,311 @@ pub(crate) fn next_line_start(text: &str, line_end: usize) -> Option<usize> {
         Some(line_end + '\n'.len_utf8())
     }
 }
+
+// ---- Attribute syntax ------------------------------------------------------
+
+/// The shape of a single djot attribute token inside a `{...}` block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttrKind {
+    /// `#id` shorthand or an `id="..."` pair.
+    Id,
+    /// `.class` shorthand.
+    Class,
+    /// A `key="value"` / `key=value` pair (any key other than `id`).
+    Pair,
+    /// A `%...%` comment.
+    Comment,
+}
+
+/// One attribute token inside a `{...}` block, with its source byte ranges.
+///
+/// jotdown parses attribute *values* but not their spans; this records the
+/// spans recovered from the source so semantic layers can locate ids, values,
+/// and whole tokens for edits without re-scanning.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpannedAttribute {
+    pub kind: AttrKind,
+    /// The whole token, e.g. `key="v"`, `#id`, `.class`, `%c%`.
+    pub token_range: Range<usize>,
+    /// The key bytes of a pair (including the `id` of an `id=` pair); `None`
+    /// for shorthand `#`/`.` tokens and comments.
+    pub key_range: Option<Range<usize>>,
+    /// The value bytes: the id/class name, or the unquoted inner of a pair
+    /// value; `None` for comments and bare keys.
+    pub value_range: Option<Range<usize>>,
+}
+
+impl SpannedAttribute {
+    fn text<'a>(&self, range: &Option<Range<usize>>, text: &'a str) -> Option<&'a str> {
+        range.as_ref().and_then(|range| text.get(range.clone()))
+    }
+
+    /// The key as a string slice of `text`, if this token has one.
+    pub fn key<'a>(&self, text: &'a str) -> Option<&'a str> {
+        self.text(&self.key_range, text)
+    }
+
+    /// The value as a string slice of `text`, if this token has one.
+    pub fn value<'a>(&self, text: &'a str) -> Option<&'a str> {
+        self.text(&self.value_range, text)
+    }
+}
+
+/// Parse a single `{...}` block into its attribute tokens. `brace_range` spans
+/// the braces inclusively (`start` at `{`, `end` one past `}`).
+pub fn attribute_block(text: &str, brace_range: &Range<usize>) -> Vec<SpannedAttribute> {
+    if brace_range.end <= brace_range.start + 1 {
+        return Vec::new();
+    }
+    parse_attributes(text, (brace_range.start + 1)..(brace_range.end - 1))
+}
+
+/// Locate every `{...}` attribute block within `span` and parse them, flattened
+/// in source order. Brace matching is quote/escape/comment aware, so a `}` or
+/// `%` inside a quoted value does not terminate the block early.
+pub fn attribute_blocks(text: &str, span: &Range<usize>) -> Vec<SpannedAttribute> {
+    let bytes = text.as_bytes();
+    let end = span.end.min(text.len());
+    let mut out = Vec::new();
+    let mut i = span.start;
+    while i < end {
+        if bytes[i] == b'{' {
+            if let Some(close) = attribute_block_end(bytes, i, end) {
+                out.extend(parse_attributes(text, (i + 1)..close));
+                i = close + 1;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+/// Index of the `}` that closes the block opened at `open`, respecting quoted
+/// values and `%...%` comments.
+fn attribute_block_end(bytes: &[u8], open: usize, end: usize) -> Option<usize> {
+    let mut i = open + 1;
+    let mut quote: Option<u8> = None;
+    while i < end {
+        let byte = bytes[i];
+        match quote {
+            Some(active) => {
+                if byte == b'\\' {
+                    i += 1;
+                } else if byte == active {
+                    quote = None;
+                }
+            }
+            None => match byte {
+                b'"' | b'\'' => quote = Some(byte),
+                b'%' => {
+                    i += 1;
+                    while i < end && bytes[i] != b'%' {
+                        i += 1;
+                    }
+                }
+                b'}' => return Some(i),
+                _ => {}
+            },
+        }
+        i += 1;
+    }
+    None
+}
+
+fn parse_attributes(text: &str, inner: Range<usize>) -> Vec<SpannedAttribute> {
+    let bytes = text.as_bytes();
+    let end = inner.end.min(text.len());
+    let mut i = inner.start;
+    let mut out = Vec::new();
+    while i < end {
+        while i < end && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i >= end {
+            break;
+        }
+        let token_start = i;
+        match bytes[i] {
+            b'%' => {
+                i += 1;
+                while i < end && bytes[i] != b'%' {
+                    i += 1;
+                }
+                if i < end {
+                    i += 1;
+                }
+                out.push(SpannedAttribute {
+                    kind: AttrKind::Comment,
+                    token_range: token_start..i,
+                    key_range: None,
+                    value_range: None,
+                });
+            }
+            b'.' => {
+                let value_start = i + 1;
+                i = value_start;
+                while i < end && is_attr_name_byte(bytes[i]) {
+                    i += 1;
+                }
+                out.push(SpannedAttribute {
+                    kind: AttrKind::Class,
+                    token_range: token_start..i,
+                    key_range: None,
+                    value_range: Some(value_start..i),
+                });
+            }
+            b'#' => {
+                let value_start = i + 1;
+                i = value_start;
+                while i < end && is_attr_name_byte(bytes[i]) {
+                    i += 1;
+                }
+                out.push(SpannedAttribute {
+                    kind: AttrKind::Id,
+                    token_range: token_start..i,
+                    key_range: None,
+                    value_range: Some(value_start..i),
+                });
+            }
+            byte if is_attr_name_byte(byte) => {
+                let key_start = i;
+                i += 1;
+                while i < end && is_attr_name_byte(bytes[i]) {
+                    i += 1;
+                }
+                let key_range = key_start..i;
+                if i >= end || bytes[i] != b'=' {
+                    out.push(SpannedAttribute {
+                        kind: AttrKind::Pair,
+                        token_range: token_start..i,
+                        key_range: Some(key_range),
+                        value_range: None,
+                    });
+                    continue;
+                }
+                i += 1; // consume '='
+                let value_range = attribute_value(bytes, &mut i, end);
+                let kind = if text.get(key_range.clone()) == Some("id") {
+                    AttrKind::Id
+                } else {
+                    AttrKind::Pair
+                };
+                out.push(SpannedAttribute {
+                    kind,
+                    token_range: token_start..i,
+                    key_range: Some(key_range),
+                    value_range: Some(value_range),
+                });
+            }
+            _ => {
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+fn attribute_value(bytes: &[u8], i: &mut usize, end: usize) -> Range<usize> {
+    if *i < end && (bytes[*i] == b'"' || bytes[*i] == b'\'') {
+        let quote = bytes[*i];
+        *i += 1;
+        let value_start = *i;
+        while *i < end {
+            match bytes[*i] {
+                b'\\' => {
+                    *i += 1;
+                    if *i < end {
+                        *i += 1;
+                    }
+                }
+                byte if byte == quote => break,
+                _ => *i += 1,
+            }
+        }
+        let value_end = *i;
+        if *i < end {
+            *i += 1; // consume closing quote
+        }
+        value_start..value_end
+    } else {
+        let value_start = *i;
+        while *i < end && is_attr_name_byte(bytes[*i]) {
+            *i += 1;
+        }
+        value_start..*i
+    }
+}
+
+pub(crate) fn is_attr_name_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b':' | b'_' | b'-')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn block(text: &str) -> Vec<SpannedAttribute> {
+        attribute_block(text, &(0..text.len()))
+    }
+
+    #[test]
+    fn parses_shorthand_classes_ids_and_pairs() {
+        let text = "{.work #the-id key=\"a value\" bare=x}";
+        let attrs = block(text);
+        let kinds: Vec<_> = attrs.iter().map(|attr| attr.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                AttrKind::Class,
+                AttrKind::Id,
+                AttrKind::Pair,
+                AttrKind::Pair
+            ]
+        );
+        assert_eq!(attrs[0].value(text), Some("work"));
+        assert_eq!(attrs[1].value(text), Some("the-id"));
+        assert_eq!(attrs[2].key(text), Some("key"));
+        assert_eq!(attrs[2].value(text), Some("a value"));
+        assert_eq!(&text[attrs[2].token_range.clone()], "key=\"a value\"");
+        assert_eq!(attrs[3].value(text), Some("x"));
+    }
+
+    #[test]
+    fn id_pair_is_classified_as_id() {
+        let text = "{id=\"x-1\"}";
+        let attrs = block(text);
+        assert_eq!(attrs.len(), 1);
+        assert_eq!(attrs[0].kind, AttrKind::Id);
+        assert_eq!(attrs[0].key(text), Some("id"));
+        assert_eq!(attrs[0].value(text), Some("x-1"));
+    }
+
+    #[test]
+    fn comments_and_escaped_quotes_are_preserved() {
+        let text = "{%a comment% note=\"esc \\\" end\" tag='two words'}";
+        let attrs = block(text);
+        assert_eq!(attrs[0].kind, AttrKind::Comment);
+        assert_eq!(&text[attrs[0].token_range.clone()], "%a comment%");
+        assert_eq!(attrs[1].value(text), Some("esc \\\" end"));
+        assert_eq!(attrs[2].value(text), Some("two words"));
+    }
+
+    #[test]
+    fn blocks_skip_braces_inside_quoted_values() {
+        let text = "x {k=\"a}b\"} y {#id}";
+        let attrs = attribute_blocks(text, &(0..text.len()));
+        assert_eq!(attrs.len(), 2);
+        assert_eq!(attrs[0].value(text), Some("a}b"));
+        assert_eq!(attrs[1].kind, AttrKind::Id);
+        assert_eq!(attrs[1].value(text), Some("id"));
+    }
+
+    #[test]
+    fn div_fence_is_colon_count_agnostic() {
+        let text = ":::: task\nbody\n::::\n";
+        let fence = div_fence(text, &(0..text.len())).unwrap();
+        assert_eq!(&text[fence.fence_range.clone()], ":::: task");
+        assert_eq!(fence.attribute_insert, 0..0);
+    }
+}

@@ -42,19 +42,19 @@ fn filter_recurring_attribute_line(line: &str) -> AttributeLineFilter<'_> {
     let newline = &line[line_without_newline.len()..];
     let indent = leading_indent(line_without_newline);
     let content = &line_without_newline[indent.len()..];
-    let Some(inner) = content.strip_prefix('{').and_then(|s| s.strip_suffix('}')) else {
+    if !(content.starts_with('{') && content.ends_with('}')) {
         return AttributeLineFilter::Keep(line);
-    };
+    }
 
-    let Some(tokens) = attribute_tokens(inner) else {
-        return AttributeLineFilter::Keep(line);
-    };
+    let brace_range = indent.len()..line_without_newline.len();
+    let tokens = crate::cst::attribute_block(line_without_newline, &brace_range);
     if tokens.is_empty() {
         return AttributeLineFilter::Keep(line);
     }
 
     let kept = tokens
         .iter()
+        .map(|token| &line_without_newline[token.token_range.clone()])
         .filter(|token| !is_recurring_instance_attribute(token))
         .collect::<Vec<_>>();
     if kept.len() == tokens.len() {
@@ -76,55 +76,6 @@ fn filter_recurring_attribute_line(line: &str) -> AttributeLineFilter<'_> {
     replacement.push('}');
     replacement.push_str(newline);
     AttributeLineFilter::Replace(replacement)
-}
-
-fn attribute_tokens(inner: &str) -> Option<Vec<&str>> {
-    let mut tokens = Vec::new();
-    let mut start = None;
-    let mut quote = None;
-    let mut escaped = false;
-
-    for (idx, ch) in inner.char_indices() {
-        if start.is_none() {
-            if ch.is_whitespace() {
-                continue;
-            }
-            start = Some(idx);
-        }
-
-        if let Some(quoted) = quote {
-            if escaped {
-                escaped = false;
-            } else if ch == '\\' {
-                escaped = true;
-            } else if ch == quoted {
-                quote = None;
-            }
-            continue;
-        }
-
-        if ch == '"' || ch == '\'' {
-            quote = Some(ch);
-        } else if ch.is_whitespace() {
-            if let Some(token_start) = start.take() {
-                tokens.push(inner[token_start..idx].trim());
-            }
-        }
-    }
-
-    if quote.is_some() {
-        return None;
-    }
-    if let Some(token_start) = start {
-        tokens.push(inner[token_start..].trim());
-    }
-
-    Some(
-        tokens
-            .into_iter()
-            .filter(|token| !token.is_empty())
-            .collect(),
-    )
 }
 
 fn is_recurring_instance_attribute(token: &str) -> bool {

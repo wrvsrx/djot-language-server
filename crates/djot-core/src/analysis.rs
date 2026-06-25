@@ -488,197 +488,33 @@ fn record_anchor_occurrence(
     }
 }
 
+/// Byte range of the source text of anchor `id` within `range`, for rename
+/// edits. Recovered from the lossless CST attribute spans rather than re-scanned
+/// here. Returns the last matching id token when several blocks carry one.
 fn anchor_id_range(text: &str, range: &Range<usize>, id: &str) -> Option<Range<usize>> {
-    let source = text.get(range.clone())?;
-    let mut found = None;
-    let mut offset = 0;
-
-    while let Some(relative_start) = source[offset..].find('{') {
-        let start = offset + relative_start;
-        let Some(relative_end) = source[start..].find('}') else {
-            break;
-        };
-        let end = start + relative_end + 1;
-        if let Some(id_range) = attribute_id_range(source, start..end, id) {
-            found = Some(range.start + id_range.start..range.start + id_range.end);
-        }
-        offset = end;
-    }
-
-    found
+    crate::cst::attribute_blocks(text, range)
+        .into_iter()
+        .filter(|attr| attr.kind == crate::cst::AttrKind::Id && attr.value(text) == Some(id))
+        .filter_map(|attr| attr.value_range)
+        .last()
 }
 
-fn attribute_id_range(source: &str, range: Range<usize>, id: &str) -> Option<Range<usize>> {
-    let bytes = source.as_bytes();
-    let mut i = range.start + 1;
-    let end = range.end.saturating_sub(1);
-    let mut found = None;
-
-    while i < end {
-        while i < end && bytes[i].is_ascii_whitespace() {
-            i += 1;
-        }
-        if i >= end {
-            break;
-        }
-
-        match bytes[i] {
-            b'%' => {
-                i += 1;
-                while i < end && bytes[i] != b'%' {
-                    i += 1;
-                }
-                if i < end {
-                    i += 1;
-                }
-            }
-            b'.' => {
-                i += 1;
-                while i < end && is_attr_name_byte(bytes[i]) {
-                    i += 1;
-                }
-            }
-            b'#' => {
-                let value_start = i + 1;
-                i = value_start;
-                while i < end && is_attr_name_byte(bytes[i]) {
-                    i += 1;
-                }
-                if source.get(value_start..i) == Some(id) {
-                    found = Some(value_start..i);
-                }
-            }
-            byte if is_attr_name_byte(byte) => {
-                let key_start = i;
-                i += 1;
-                while i < end && is_attr_name_byte(bytes[i]) {
-                    i += 1;
-                }
-                let key = &source[key_start..i];
-                if i >= end || bytes[i] != b'=' {
-                    continue;
-                }
-                i += 1;
-
-                let value_range = if i < end && bytes[i] == b'"' {
-                    i += 1;
-                    let value_start = i;
-                    while i < end {
-                        match bytes[i] {
-                            b'\\' => {
-                                i += 1;
-                                if i < end {
-                                    i += 1;
-                                }
-                            }
-                            b'"' => break,
-                            _ => i += 1,
-                        }
-                    }
-                    let value_end = i;
-                    if i < end {
-                        i += 1;
-                    }
-                    value_start..value_end
-                } else {
-                    let value_start = i;
-                    while i < end && is_attr_name_byte(bytes[i]) {
-                        i += 1;
-                    }
-                    value_start..i
-                };
-
-                if key == "id" && source.get(value_range.clone()) == Some(id) {
-                    found = Some(value_range);
-                }
-            }
-            _ => break,
-        }
-    }
-
-    found
-}
-
-fn is_attr_name_byte(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || matches!(byte, b':' | b'_' | b'-')
-}
-
+/// Byte range of the value of attribute `key` (when it equals `value`) within
+/// `range`, for edits that rewrite a specific attribute value. Recovered from
+/// the lossless CST attribute spans. Returns the first match in source order.
 pub(crate) fn attribute_value_range(
     text: &str,
     range: &Range<usize>,
     key: &str,
     value: &str,
 ) -> Option<Range<usize>> {
-    let source = text.get(range.clone())?;
-    let mut search_start = 0;
-
-    while search_start < source.len() {
-        let key_start = source.get(search_start..)?.find(key)? + search_start;
-        let before = source.get(..key_start)?.chars().next_back();
-        if before.is_some_and(|c| !(c == '{' || c.is_whitespace())) {
-            search_start = key_start + key.len();
-            continue;
-        }
-
-        let mut cursor = key_start + key.len();
-        cursor = skip_ascii_whitespace(source, cursor);
-        if source.as_bytes().get(cursor) != Some(&b'=') {
-            search_start = key_start + key.len();
-            continue;
-        }
-        cursor += 1;
-        cursor = skip_ascii_whitespace(source, cursor);
-
-        let (value_start, value_end) = match source.as_bytes().get(cursor).copied() {
-            Some(quote @ (b'"' | b'\'')) => {
-                let value_start = cursor + 1;
-                let mut pos = value_start;
-                let mut escaped = false;
-                loop {
-                    let byte = *source.as_bytes().get(pos)?;
-                    if escaped {
-                        escaped = false;
-                    } else if byte == b'\\' {
-                        escaped = true;
-                    } else if byte == quote {
-                        break (value_start, pos);
-                    }
-                    pos += 1;
-                }
-            }
-            Some(_) => {
-                let value_start = cursor;
-                let mut value_end = cursor;
-                while let Some(byte) = source.as_bytes().get(value_end) {
-                    if byte.is_ascii_whitespace() || *byte == b'}' {
-                        break;
-                    }
-                    value_end += 1;
-                }
-                (value_start, value_end)
-            }
-            None => return None,
-        };
-
-        if source.get(value_start..value_end)? == value {
-            return Some(range.start + value_start..range.start + value_end);
-        }
-
-        search_start = key_start + key.len();
-    }
-
-    None
-}
-
-fn skip_ascii_whitespace(source: &str, mut cursor: usize) -> usize {
-    while source
-        .as_bytes()
-        .get(cursor)
-        .is_some_and(u8::is_ascii_whitespace)
-    {
-        cursor += 1;
-    }
-    cursor
+    crate::cst::attribute_blocks(text, range)
+        .into_iter()
+        .filter(|attr| attr.key(text) == Some(key))
+        .find_map(|attr| {
+            let value_range = attr.value_range?;
+            (text.get(value_range.clone()) == Some(value)).then_some(value_range)
+        })
 }
 
 fn datetime_attribute(attrs: &Attributes, key: &str) -> Option<String> {
