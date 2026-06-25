@@ -1,0 +1,182 @@
+# Lossless djot CST refactor
+
+Design for the [lossless source-map layer](plan.dj) that `plan.dj` lists under
+*"Add a lossless source-map layer for edit-sensitive Djot syntax"*. This document
+is the concrete architecture and staged delivery; `plan.dj` keeps only the
+one-line roadmap entry and points here.
+
+## Why
+
+`djot-core` parses with `jotdown`, whose API gives **parsed values but not their
+source byte ranges**:
+
+- `Attributes::get_value` returns the value of `{#my-id key="v"}` but not where
+  it sits (confirmed in `jotdown-0.10.0` `attr.rs`: `Attributes` exposes only
+  `get_value` / `unique_pairs` / `parts`, no span or location).
+- `Container::Link(dst)` gives the destination string but not where `(`, `)`, or
+  `#` are inside the `[..](..)` source.
+- `Container::Div` has a span, but the fence syntax (colon count, indent, `- `
+  list prefix) is not described.
+
+To compensate, byte-scanning has accumulated **inside the semantic layer**, with
+the *same two syntaxes* hand-parsed in several places:
+
+- Attribute `{.class #id key="v"}` — two independent scanners:
+  `analysis.rs` `attribute_id_range` + `attribute_value_range` (one key at a
+  time), and `tasks/attributes.rs` `attribute_tokens` (recurring-template
+  filtering).
+- Link / reference target `path#frag` — `references.rs` `parse_dst`,
+  `parse_task_reference_target`, plus range recovery (`reference_id_range`,
+  `reference_target_path_range`, `task_reference_*_range`) that re-`find()`s
+  substrings, and the offset math in `djot-ls` `completion.rs`.
+- Task fence / list structure — `tasks/edits.rs` `task_opening_fence` and
+  helpers, which string-match the literal `"::: task"`.
+
+This duplication is also an active **bug**. `task_opening_fence` matches exactly
+three colons, so a nested `:::: task` (4 colons) is skipped and the edit lands on
+the wrong fence: completing an *unfinished outer* task whose cursor sits inside an
+*already-done nested* task writes a redundant `done` onto the nested task and
+never marks the outer one.
+
+The fix is **not** to delete the scanners — scanning is an irreducible
+compensation for jotdown's lossy spans. It is to **concentrate all syntactic
+scanning into one semantics-agnostic layer** that, driven by jotdown events,
+produces a lossless CST where every attribute, fence, and link destination
+carries its source range. Semantic analysis and edit emission then read CST
+ranges instead of re-parsing.
+
+Two payoffs: (1) avoid almost all re-parsing; (2) the CST is a standalone
+"detailed djot syntax analyzer" independent of this project's semantic
+conventions, so it can later be extracted as its own crate.
+
+## Architecture
+
+Two layers inside `djot-core`, with a clean seam for later crate extraction.
+
+### Layer A --- `cst` module (new, semantics-agnostic)
+
+`crates/djot-core/src/cst/` knows djot *syntax* only --- no notion of tasks,
+metadata, `done` / `due`, or `path#anchor`. It owns the single `jotdown::Parser`
+walk and emits span-enriched syntax. It is **not** a full tree with parent
+pointers --- an enriched node/event layer plus span-resolving helpers is all the
+consumers need.
+
+Indicative types:
+
+```
+pub enum AttrKind { Id, Class, Pair, Comment }
+
+pub struct SpannedAttribute {
+    pub kind: AttrKind,
+    pub key_range: Option<Range<usize>>,
+    pub value_range: Range<usize>,
+}
+
+pub struct AttributeSpans {           // one parse of a `{...}` block
+    pub block_range: Range<usize>,
+    pub attrs: Vec<SpannedAttribute>,
+}
+// value_range(key) / id_range() lookups
+
+pub struct DivFence {                 // colon-count agnostic
+    pub fence_range: Range<usize>,    // the opening fence LINE (`:::: task`)
+    pub attribute_insert: Range<usize>,
+    pub indent: String,
+    pub list_marker: Option<Range<usize>>, // set for the `- ::: task` form
+}
+
+pub struct LinkSyntax { pub dst_range: Range<usize> }
+```
+
+Helpers (relocate and generalize today's scanners; parse a block **once** into a
+structure instead of searching per key):
+
+- `cst::attribute_spans(text, container_span)` --- absorbs `anchor_id_range` +
+  `attribute_id_range` + `attribute_value_range`.
+- `cst::div_fence(text, div_span)` --- replaces `task_opening_fence` +
+  `task_opening_fence_from_line`. Reads the line at `div_span.start` directly and
+  **never matches a colon literal**, so any fence depth works.
+- `cst::link_syntax(text, link_span)` --- gives the `dst` range; replaces
+  `reference_target_search_start`'s `](` scan.
+
+The line/byte primitives (`line_bounds`, `leading_indent`,
+`previous`/`next_line_start`) move here as the CST's own utilities.
+
+### Layer B --- semantic layer (existing `analysis` / `tasks` / `references`)
+
+Consumes Layer A. `analyze()` keeps driving the pass but, per container, calls
+`cst::attribute_spans` once and reads ranges from it; task building calls
+`cst::div_fence`. The `path#anchor` split **stays in Layer B** (it is a project
+convention djot does not define), but now splits the CST-provided `dst_range`
+substring instead of re-scanning the whole document. `is_rfc3339_datetime`,
+percent-decoding, LSP UTF-16 position conversion, and ANSI preview highlighting
+stay where they are --- they are domain or presentation logic, not djot syntax.
+
+## Staged delivery
+
+One commit per slice; each slice compiles, tests, and stands alone. Pause for
+review after Slice 1.
+
+- [ ] **Slice 1 --- CST foundation + fence bug.**
+
+  - Create `crates/djot-core/src/cst/mod.rs` with `DivFence`, the line
+    primitives (moved from `tasks/attributes.rs`), and `cst::div_fence`.
+  - Add `fence_range` and `attribute_insert` to `Task` (`tasks/model.rs`).
+    Populate in `analysis.rs` at the `Container::Div { class } if class ==
+    TASK_CLASS` arm via `cst::div_fence(text, &span)`, using the div's **own**
+    span.
+  - In `tasks/edits.rs`, make `simple_task_status_edits` /
+    `recurring_task_status_edits` read `task.attribute_insert` /
+    `task.fence_range`; delete `task_opening_fence`,
+    `task_opening_fence_from_line`, and the dead `TaskOpeningFence`.
+  - Regression test in `tests/task_editing.rs`: completing the outer task while
+    the cursor is inside the already-done nested task marks the **outer**
+    `:::: task` done and makes **no** edit to the nested task.
+
+  The `code_action.rs` ancestor-rebind (offering *Complete task* for the outer
+  task from inside a done descendant) is correct once the fence is located right;
+  this slice does not change action availability.
+
+- [ ] **Slice 2 --- attribute CST.** Add `cst::attribute_spans` /
+  `AttributeSpans`. Route anchor-id range (`anchor_id_range`), metadata, and task
+  attribute range recovery through it; fold `tasks/attributes.rs` token filtering
+  onto the same parse. Delete the duplicated `attribute_id_range` /
+  `attribute_value_range` / `attribute_tokens`.
+
+- [ ] **Slice 3 --- link / reference CST.** Add `cst::link_syntax`.
+  `reference_target_id_range` / `reference_target_path_range` read the CST
+  `dst_range`; `parse_dst` / `parse_task_reference_target` split that known span.
+  Remove `reference_id_range` / `reference_target_search_start` whole-source
+  `find()`s.
+
+- [ ] **Slice 4 (optional, later) --- invert control + extraction seam.** Have
+  `analyze()` iterate Layer A's enriched node stream rather than calling
+  `jotdown::Parser` directly, isolating jotdown behind `cst`. This is where `cst`
+  could move to a `crates/djot-syntax` crate, and where an error-tolerant parse
+  could give `completion.rs`'s incomplete-link scanner a home inside the CST. Not
+  required for the bug fix; flagged so earlier slices keep the boundary clean.
+
+## Critical files
+
+- new `crates/djot-core/src/cst/mod.rs` (Layer A)
+- `crates/djot-core/src/analysis.rs` (build CST spans during the pass; drop the
+  attribute scanners in Slice 2)
+- `crates/djot-core/src/tasks/model.rs` (`Task` gains `fence_range` /
+  `attribute_insert`)
+- `crates/djot-core/src/tasks/edits.rs` (read CST ranges; delete
+  `task_opening_fence*`)
+- `crates/djot-core/src/tasks/attributes.rs` (line primitives move to `cst`;
+  token filter folds into `attribute_spans` in Slice 2)
+- `crates/djot-core/src/references.rs` (Slice 3)
+- `crates/djot-core/src/lib.rs` (`mod cst;` and new exports)
+
+## Verification
+
+- Per slice: `cargo test -p djot-core`, then the full workspace `cargo test`, then
+  the warning gate `cargo check --workspace --all-targets`.
+- Slice 1: the nested-fence regression test must fail on the current
+  `task_opening_fence` and pass after switching to `cst::div_fence`.
+- Manual: open a document with a nested `:::: task` in an editor wired to
+  `djot-ls`, put the cursor inside the done nested task, run *Complete task*, and
+  confirm the outer `:::: task` gets `{done=...}` and the nested task is
+  untouched.

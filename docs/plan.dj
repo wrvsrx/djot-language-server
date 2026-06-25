@@ -150,7 +150,9 @@ Current `djot-filter` usage and query context are documented in
     task attribute helpers out of `tasks.rs` if task CLI/editor actions keep
     growing.
 
-- [ ] Add a lossless source-map layer for edit-sensitive Djot syntax:
+- [ ] Add a lossless source-map layer for edit-sensitive Djot syntax. Concrete
+  architecture and staged delivery (Slices 1--4) live in
+  [cst-refactor](cst-refactor.dj); the points below are the original sketch.
 
   - Keep jotdown as the structural Djot parser for now, but make its event
     stream an implementation detail behind `djot-core` analysis APIs.
