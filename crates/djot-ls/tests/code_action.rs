@@ -547,14 +547,17 @@ fn code_action_marks_indented_recurring_task_done_and_creates_next_instance() {
     assert!(done_insert.starts_with("  {done=\""));
     assert_timestamp_shape(done_insert, "  {done=\"");
 
+    // The next instance is inserted on its own line after the closing `:::\n`,
+    // so the edit anchors at the start of the following line with no leading
+    // separator in the new text.
     assert_eq!(
         edits[1]["range"],
-        json!({"start":{"line":7,"character":5},"end":{"line":7,"character":5}})
+        json!({"start":{"line":8,"character":0},"end":{"line":8,"character":0}})
     );
     let next_insert = edits[1]["newText"]
         .as_str()
         .expect("newText is not a string");
-    assert!(next_insert.contains("\n- {#Daily-review-2026-06-22}\n"));
+    assert!(next_insert.starts_with("- {#Daily-review-2026-06-22}\n"));
     assert!(next_insert.contains("  {created=\"20"));
     assert!(next_insert.contains("  {project=\"ops\"}\n"));
     assert!(!next_insert.contains("2026-06-20T09:30:00Z"));
@@ -597,7 +600,7 @@ fn code_action_drops_quoted_id_from_next_recurring_task_instance() {
     let next_insert = edits[1]["newText"]
         .as_str()
         .expect("newText is not a string");
-    assert!(next_insert.contains("\n- {#task-with-id-2026-06-23}\n"));
+    assert!(next_insert.starts_with("- {#task-with-id-2026-06-23}\n"));
     assert!(next_insert.contains(" prev=\"#a-task\""));
     assert!(!next_insert.contains("{id=\"a-task\"}"));
     assert!(next_insert.contains("  ::: task\n  task with id\n  :::\n"));
