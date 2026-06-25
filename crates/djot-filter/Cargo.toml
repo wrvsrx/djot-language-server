@@ -10,7 +10,6 @@ chrono.workspace = true
 clap.workspace = true
 comfy-table.workspace = true
 djot-core = { path = "../djot-core" }
-jotdown.workspace = true
 shlex.workspace = true
 skim.workspace = true
 toml.workspace = true

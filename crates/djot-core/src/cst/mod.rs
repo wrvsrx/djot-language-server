@@ -492,6 +492,60 @@ pub(crate) fn is_attr_name_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || matches!(byte, b':' | b'_' | b'-')
 }
 
+// ---- Cursor queries --------------------------------------------------------
+
+/// The source span and destination of the closed inline link whose `[..](..)`
+/// covers `offset`, if any. Used by completion to offer anchor/path completions
+/// inside an existing link.
+pub fn closed_link_at(text: &str, offset: usize) -> Option<(Range<usize>, String)> {
+    parse(text).find_map(|(event, span)| match event {
+        Event::End(Container::Link { dst }) if span.start <= offset && offset <= span.end => {
+            Some((span, dst))
+        }
+        _ => None,
+    })
+}
+
+/// The span of the plain-text run touching `offset`, or `None` when the cursor
+/// sits in verbatim/code/math/raw/link/image content, whose inline text is not
+/// editable prose. Uses jotdown's full container set, which the flattened
+/// [`Container`] does not preserve.
+pub fn plain_str_at(text: &str, offset: usize) -> Option<Range<usize>> {
+    let mut ignored_depth = 0usize;
+    for (event, span) in Parser::new(text).into_offset_iter() {
+        match event {
+            jotdown::Event::Start(container, _) => {
+                if ignored_depth > 0 || ignores_inline_text(&container) {
+                    ignored_depth += 1;
+                }
+            }
+            jotdown::Event::End(_) => {
+                ignored_depth = ignored_depth.saturating_sub(1);
+            }
+            jotdown::Event::Str(_)
+                if ignored_depth == 0 && span.start <= offset && offset <= span.end =>
+            {
+                return Some(span);
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn ignores_inline_text(container: &jotdown::Container) -> bool {
+    matches!(
+        container,
+        jotdown::Container::Verbatim
+            | jotdown::Container::CodeBlock { .. }
+            | jotdown::Container::Math { .. }
+            | jotdown::Container::RawInline { .. }
+            | jotdown::Container::RawBlock { .. }
+            | jotdown::Container::Link(_, _)
+            | jotdown::Container::Image(_, _)
+    )
+}
+
 // ---- Links -----------------------------------------------------------------
 
 /// Syntactic spans within an inline link `[label](destination)`.

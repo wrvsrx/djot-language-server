@@ -1,7 +1,6 @@
 use std::path::Path;
 
-use jotdown::{Container, Event, Parser};
-
+use crate::cst::{self, Container, Event};
 use crate::*;
 
 #[test]
@@ -257,7 +256,7 @@ fn parse_dst_classifies_destinations() {
 }
 
 #[test]
-fn jotdown_cursor_link_parsing_shapes() {
+fn cursor_link_parsing_shapes() {
     for (marked, expected_str) in [
         ("[|", Some("[")),
         ("[foo|", Some("[foo")),
@@ -276,10 +275,10 @@ fn jotdown_cursor_link_parsing_shapes() {
 
     let (text, cursor) = strip_cursor_marker("[foo](|)");
     assert!(
-        Parser::new(&text).into_offset_iter().any(|(event, span)| {
+        cst::parse(&text).any(|(event, span)| {
             span.start <= cursor
                 && cursor <= span.end
-                && matches!(event, Event::End(Container::Link(_, _)))
+                && matches!(event, Event::End(Container::Link { .. }))
         }),
         "cursor in a complete empty destination is in the link end syntax span"
     );
@@ -291,10 +290,8 @@ fn strip_cursor_marker(marked: &str) -> (String, usize) {
 }
 
 fn str_event_touching_cursor(text: &str, cursor: usize) -> Option<String> {
-    Parser::new(text)
-        .into_offset_iter()
-        .find_map(|(event, span)| match event {
-            Event::Str(s) if span.start <= cursor && cursor <= span.end => Some(s.to_string()),
-            _ => None,
-        })
+    cst::parse(text).find_map(|(event, span)| match event {
+        Event::Str(s) if span.start <= cursor && cursor <= span.end => Some(s),
+        _ => None,
+    })
 }

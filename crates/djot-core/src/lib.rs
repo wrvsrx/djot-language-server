@@ -19,6 +19,7 @@ pub use analysis::{
     analyze, build_index, heading_outline, metadata_block, metadata_insertion_edit, tasks,
     Analysis, Anchor, DocIndex, Heading, NativeTaskListItem,
 };
+pub use cst::{closed_link_at, plain_str_at};
 pub use diagnostics::{AnalysisDiagnostic, DiagnosticKind};
 pub use edits::{
     apply_text_edits, DocumentTextEdit, EditError, FileRenameEdit, TextEdit, WorkspaceEdit,

@@ -1,6 +1,5 @@
 use std::ops::Range as ByteRange;
 
-use jotdown::{Container, Event, Parser};
 use lsp_types::{CompletionItem, CompletionItemKind, CompletionTextEdit, TextEdit};
 
 use crate::position::byte_range_to_lsp;
@@ -48,7 +47,7 @@ pub(crate) fn link_completion_context(text: &str, offset: usize) -> Option<LinkC
 }
 
 fn incomplete_link_completion_context(text: &str, offset: usize) -> Option<LinkCompletionContext> {
-    let str_span = str_event_touching_cursor(text, offset)?;
+    let str_span = djot_core::plain_str_at(text, offset)?;
     let prefix = &text[str_span.start..offset];
     let mut state = LinkScanState::Text;
 
@@ -124,14 +123,8 @@ fn closed_link_anchor_completion_context(
     text: &str,
     offset: usize,
 ) -> Option<LinkCompletionContext> {
-    Parser::new(text)
-        .into_offset_iter()
-        .find_map(|(event, span)| match event {
-            Event::End(Container::Link(dst, _)) if span.start <= offset && offset <= span.end => {
-                closed_link_completion_from_end_span(text, span, dst.as_ref(), offset)
-            }
-            _ => None,
-        })
+    let (span, dst) = djot_core::closed_link_at(text, offset)?;
+    closed_link_completion_from_end_span(text, span, &dst, offset)
 }
 
 fn closed_link_completion_from_end_span(
@@ -193,41 +186,6 @@ fn label_completion_replace_end(text: &str, offset: usize, limit: usize) -> usiz
     } else {
         offset
     }
-}
-
-fn str_event_touching_cursor(text: &str, offset: usize) -> Option<ByteRange<usize>> {
-    let mut ignored_depth = 0usize;
-    for (event, span) in Parser::new(text).into_offset_iter() {
-        match event {
-            Event::Start(container, _) => {
-                if ignored_depth > 0 || ignores_completion_str(&container) {
-                    ignored_depth += 1;
-                }
-            }
-            Event::End(container) => {
-                let _ = container;
-                ignored_depth = ignored_depth.saturating_sub(1);
-            }
-            Event::Str(_) if ignored_depth == 0 && span.start <= offset && offset <= span.end => {
-                return Some(span);
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-fn ignores_completion_str(container: &Container<'_>) -> bool {
-    matches!(
-        container,
-        Container::Verbatim
-            | Container::CodeBlock { .. }
-            | Container::Math { .. }
-            | Container::RawInline { .. }
-            | Container::RawBlock { .. }
-            | Container::Link(_, _)
-            | Container::Image(_, _)
-    )
 }
 
 fn is_escaped(text: &str, byte_index: usize) -> bool {
