@@ -72,9 +72,15 @@ djot-export doc.dj | pandoc -f json -o doc.pdf
 ```
 
 Pandoc's native Djot reader handles the syntax conversion. `djot-export` then
-applies this project's export semantics: a `{.metadata}` toml block is lifted
-out of the rendered body and folded into pandoc metadata rather than printed as
-a code block.
+applies this project's export semantics:
+
+- a `{.metadata}` toml block is lifted out of the rendered body and folded into
+  pandoc metadata rather than printed as a code block;
+- a `[X]{.cite}` span becomes a pandoc `Cite` node, where `X` is exactly a
+  pandoc-markdown citation: `[@smith2004]{.cite}`, `[-@smith2004]{.cite}`,
+  `[@smith2004, pp. 33-35]{.cite}`, `[see @smith2004]{.cite}`, and
+  `[@smith2004; @doe2010]{.cite}`. Resolve them with a downstream
+  `pandoc --citeproc --bibliography refs.json`.
 
 # Notes
 

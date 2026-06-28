@@ -42,6 +42,19 @@ fn main() {
 }
 ```
 
+# Citations
+
+A `[X]{.cite}` span is rewritten to a pandoc `Cite` node, with `X` parsed as a
+pandoc-markdown citation: a plain key [@smith2004]{.cite}, a suppressed author
+[-@smith2004]{.cite}, a locator [@smith2004, pp. 33-35]{.cite}, a prefix
+[see @smith2004]{.cite}, and multiple keys [@smith2004; @doe2010]{.cite}.
+
+Resolve them downstream:
+
+``` sh
+djot-export examples/djot-export.dj | pandoc -f json -t markdown --citeproc --bibliography refs.json
+```
+
 # Table-shaped text
 
 Tables are not the focus of the current exporter. Keep this section as plain
