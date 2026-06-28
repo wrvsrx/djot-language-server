@@ -36,7 +36,7 @@ fn main() -> ExitCode {
             let docs = match load_docs(&root) {
                 Ok(docs) => docs,
                 Err(err) => {
-                    eprintln!("djot-filter: {err}");
+                    eprintln!("djot-notes: {err}");
                     return ExitCode::FAILURE;
                 }
             };
@@ -45,14 +45,14 @@ fn main() -> ExitCode {
                 let plan = match QueryPlan::compile(query) {
                     Ok(plan) => plan,
                     Err(err) => {
-                        eprintln!("djot-filter: {err}");
+                        eprintln!("djot-notes: {err}");
                         return ExitCode::FAILURE;
                     }
                 };
                 match retain_query_matches(&root, &docs, &mut paths, &plan) {
                     Ok(()) => {}
                     Err(err) => {
-                        eprintln!("djot-filter: {err}");
+                        eprintln!("djot-notes: {err}");
                         return ExitCode::FAILURE;
                     }
                 }
@@ -63,12 +63,12 @@ fn main() -> ExitCode {
                 match run_interactive(&root, &paths, &docs.texts) {
                     Ok(action) => {
                         if let Err(err) = handle_interactive_action(&root, action) {
-                            eprintln!("djot-filter: {err}");
+                            eprintln!("djot-notes: {err}");
                             return ExitCode::FAILURE;
                         }
                     }
                     Err(err) => {
-                        eprintln!("djot-filter: {err}");
+                        eprintln!("djot-notes: {err}");
                         return ExitCode::FAILURE;
                     }
                 }
@@ -79,11 +79,11 @@ fn main() -> ExitCode {
         CommandMode::Task(task) => {
             if let Some(action) = &task.action {
                 if config.query.is_some() {
-                    eprintln!("djot-filter: task actions do not support --query yet; pass explicit TARGET values");
+                    eprintln!("djot-notes: task actions do not support --query yet; pass explicit TARGET values");
                     return ExitCode::FAILURE;
                 }
                 if let Err(err) = run_task_action(&root, action) {
-                    eprintln!("djot-filter: {err}");
+                    eprintln!("djot-notes: {err}");
                     return ExitCode::FAILURE;
                 }
                 return ExitCode::SUCCESS;
@@ -92,7 +92,7 @@ fn main() -> ExitCode {
             let docs = match load_docs(&root) {
                 Ok(docs) => docs,
                 Err(err) => {
-                    eprintln!("djot-filter: {err}");
+                    eprintln!("djot-notes: {err}");
                     return ExitCode::FAILURE;
                 }
             };
@@ -100,7 +100,7 @@ fn main() -> ExitCode {
                 Some(query) => match QueryPlan::compile(query) {
                     Ok(plan) => Some(plan),
                     Err(err) => {
-                        eprintln!("djot-filter: {err}");
+                        eprintln!("djot-notes: {err}");
                         return ExitCode::FAILURE;
                     }
                 },
@@ -108,7 +108,7 @@ fn main() -> ExitCode {
             };
             if let Err(err) = print_tasks(&root, &docs, plan.as_ref(), !task.flat, !task.no_heading)
             {
-                eprintln!("djot-filter: {err}");
+                eprintln!("djot-notes: {err}");
                 return ExitCode::FAILURE;
             }
         }
@@ -119,7 +119,7 @@ fn main() -> ExitCode {
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "djot-filter",
+    name = "djot-notes",
     about = "Filter .dj/.djot files under a directory"
 )]
 struct Config {
@@ -290,7 +290,7 @@ mod tests {
     #[test]
     fn note_subcommand_accepts_root_query_and_interactive_after_subcommand() {
         let config = Config::parse_from([
-            "djot-filter",
+            "djot-notes",
             "note",
             "--root",
             "notes",
@@ -310,7 +310,7 @@ mod tests {
     #[test]
     fn task_subcommand_accepts_root_and_query_after_subcommand() {
         let config = Config::parse_from([
-            "djot-filter",
+            "djot-notes",
             "task",
             "--root",
             "notes",
@@ -332,7 +332,7 @@ mod tests {
 
     #[test]
     fn task_subcommand_accepts_flat_flag() {
-        let config = Config::parse_from(["djot-filter", "task", "--flat"]);
+        let config = Config::parse_from(["djot-notes", "task", "--flat"]);
 
         assert!(matches!(
             config.command,
@@ -346,7 +346,7 @@ mod tests {
 
     #[test]
     fn task_subcommand_accepts_no_heading_flag() {
-        let config = Config::parse_from(["djot-filter", "task", "--no-heading"]);
+        let config = Config::parse_from(["djot-notes", "task", "--no-heading"]);
 
         assert!(matches!(
             config.command,
@@ -360,7 +360,7 @@ mod tests {
 
     #[test]
     fn task_done_subcommand_accepts_targets() {
-        let config = Config::parse_from(["djot-filter", "task", "done", "tasks.dj#write-parser"]);
+        let config = Config::parse_from(["djot-notes", "task", "done", "tasks.dj#write-parser"]);
 
         let CommandMode::Task(TaskConfig {
             action: Some(TaskAction::Done(done)),
@@ -374,22 +374,22 @@ mod tests {
 
     #[test]
     fn default_notes_command_is_removed() {
-        let err = Config::try_parse_from(["djot-filter", "--query", "true"]).unwrap_err();
+        let err = Config::try_parse_from(["djot-notes", "--query", "true"]).unwrap_err();
         assert_eq!(err.kind(), clap::error::ErrorKind::MissingSubcommand);
     }
 
     #[test]
     fn plural_subcommands_are_rejected() {
-        let notes_err = Config::try_parse_from(["djot-filter", "notes"]).unwrap_err();
+        let notes_err = Config::try_parse_from(["djot-notes", "notes"]).unwrap_err();
         assert_eq!(notes_err.kind(), clap::error::ErrorKind::InvalidSubcommand);
 
-        let tasks_err = Config::try_parse_from(["djot-filter", "tasks"]).unwrap_err();
+        let tasks_err = Config::try_parse_from(["djot-notes", "tasks"]).unwrap_err();
         assert_eq!(tasks_err.kind(), clap::error::ErrorKind::InvalidSubcommand);
     }
 
     #[test]
     fn cel_query_matches_path_and_title() {
-        let root = unique_test_dir("djot-filter-query-title-test");
+        let root = unique_test_dir("djot-notes-query-title-test");
         std::fs::create_dir_all(root.join("docs")).unwrap();
         std::fs::write(
             root.join("docs/semantics.dj"),
@@ -411,7 +411,7 @@ mod tests {
 
     #[test]
     fn cel_query_matches_direct_and_transitive_reverse_references() {
-        let root = unique_test_dir("djot-filter-query-reference-test");
+        let root = unique_test_dir("djot-notes-query-reference-test");
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("index.dj"), "[topic](topic.dj)\n").unwrap();
         std::fs::write(root.join("topic.dj"), "[leaf](leaf.dj)\n").unwrap();
@@ -442,7 +442,7 @@ mod tests {
 
     #[test]
     fn task_query_matches_title_created_and_done() {
-        let root = unique_test_dir("djot-filter-task-query-test");
+        let root = unique_test_dir("djot-notes-task-query-test");
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(
             root.join("tasks.dj"),
@@ -524,7 +524,7 @@ mod tests {
 
     #[test]
     fn task_output_prefixes_nested_titles_by_default() {
-        let root = unique_test_dir("djot-filter-task-tree-test");
+        let root = unique_test_dir("djot-notes-task-tree-test");
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(
             root.join("tasks.dj"),
@@ -557,7 +557,7 @@ mod tests {
 
     #[test]
     fn task_done_target_marks_task_done() {
-        let root = unique_test_dir("djot-filter-task-done-test");
+        let root = unique_test_dir("djot-notes-task-done-test");
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("tasks.dj");
         std::fs::write(&path, "{#write-parser}\n::: task\nWrite parser.\n:::\n").unwrap();
@@ -574,7 +574,7 @@ mod tests {
 
     #[test]
     fn task_done_target_advances_recurring_task() {
-        let root = unique_test_dir("djot-filter-task-done-recurring-test");
+        let root = unique_test_dir("djot-notes-task-done-recurring-test");
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("tasks.dj");
         std::fs::write(
@@ -599,7 +599,7 @@ mod tests {
 
     #[test]
     fn task_query_matches_dependency_fields() {
-        let root = unique_test_dir("djot-filter-task-dependency-test");
+        let root = unique_test_dir("djot-notes-task-dependency-test");
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(
             root.join("tasks.dj"),
@@ -695,14 +695,14 @@ mod tests {
 
     #[test]
     fn editor_paths_are_root_relative_and_keep_spaces() {
-        let root = normalize(Path::new("/tmp/djot-filter-root"));
+        let root = normalize(Path::new("/tmp/djot-notes-root"));
         let paths = editor_paths(&root, &["other file.dj".to_string()]);
         assert_eq!(paths, vec![root.join("other file.dj")]);
     }
 
     #[test]
     fn create_file_from_query_creates_root_relative_file() {
-        let root = unique_test_dir("djot-filter-create-test");
+        let root = unique_test_dir("djot-notes-create-test");
         std::fs::create_dir_all(&root).unwrap();
 
         let path = create_file_from_query(&root, "notes/other file.dj").unwrap();
@@ -714,7 +714,7 @@ mod tests {
 
     #[test]
     fn create_file_from_query_adds_default_dj_extension() {
-        let root = unique_test_dir("djot-filter-create-extension-test");
+        let root = unique_test_dir("djot-notes-create-extension-test");
         std::fs::create_dir_all(&root).unwrap();
 
         let plain = create_file_from_query(&root, "topic").unwrap();
@@ -734,7 +734,7 @@ mod tests {
 
     #[test]
     fn create_file_from_query_rejects_empty_or_escaping_path() {
-        let root = unique_test_dir("djot-filter-create-reject-test");
+        let root = unique_test_dir("djot-notes-create-reject-test");
         std::fs::create_dir_all(&root).unwrap();
 
         assert!(create_file_from_query(&root, "  ").is_err());

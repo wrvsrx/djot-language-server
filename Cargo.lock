@@ -535,20 +535,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "djot-filter"
-version = "0.21.0-dev"
-dependencies = [
- "cel",
- "chrono",
- "clap 4.6.1",
- "comfy-table",
- "djot-core",
- "shlex 1.3.0",
- "skim",
- "toml",
-]
-
-[[package]]
 name = "djot-ls"
 version = "0.21.0-dev"
 dependencies = [
@@ -563,6 +549,20 @@ dependencies = [
  "tower",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "djot-notes"
+version = "0.21.0-dev"
+dependencies = [
+ "cel",
+ "chrono",
+ "clap 4.6.1",
+ "comfy-table",
+ "djot-core",
+ "shlex 1.3.0",
+ "skim",
+ "toml",
 ]
 
 [[package]]
