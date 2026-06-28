@@ -10,17 +10,17 @@ instructions.
 
 A Language Server (LSP) for [Djot](https://djot.net), written in Rust. It parses documents with [`jotdown`](https://docs.rs/jotdown) and serves them over LSP using [`async-lsp`](https://docs.rs/async-lsp). The roadmap lives in `docs/plan.dj` (documentSymbol → definition → references → hover → diagnostics → completion → semantic tokens). `textDocument/documentSymbol` (nested headings), `textDocument/definition` (same-file and cross-file links), `textDocument/references` (backlinks), and `textDocument/hover` (target information) are implemented.
 
-This is a **Cargo workspace** (`crates/*`) so the djot semantics can be shared by more than one tool. Alongside the language server there is `djot-export`, a CLI that uses Pandoc's native Djot reader and applies project-specific export semantics to produce a pandoc JSON AST (`djot-export doc.dj | pandoc -f json -o doc.pdf`), and `djot-filter`, a CLI for filtering directories of djot documents with CEL predicates over path, title, and reverse references.
+This is a **Cargo workspace** (`crates/*`) so the djot semantics can be shared by more than one tool. Alongside the language server there is `djot-export`, a CLI that uses Pandoc's native Djot reader and applies project-specific export semantics to produce a pandoc JSON AST (`djot-export doc.dj | pandoc -f json -o doc.pdf`), and `djot-notes`, a CLI for querying directories of djot documents with CEL predicates over path, title, and reverse references, and for operating on their tasks.
 
 ## Project layout
 
 - `Cargo.toml` is the workspace root. Members are `crates/djot-core`,
-  `crates/djot-ls`, `crates/djot-export`, and `crates/djot-filter`.
+  `crates/djot-ls`, `crates/djot-export`, and `crates/djot-notes`.
 - `crates/djot-core/` is the protocol-agnostic djot analysis library.
 - `crates/djot-ls/` is the `djot-ls` LSP binary and its black-box integration
   tests.
 - `crates/djot-export/` is the `djot-export` CLI.
-- `crates/djot-filter/` is the `djot-filter` CLI.
+- `crates/djot-notes/` is the `djot-notes` CLI.
 - `docs/plan.dj` is the feature roadmap.
 - `docs/semantics.dj` describes the current project semantics layered on top of
   Djot syntax.
@@ -45,12 +45,12 @@ This is a **Cargo workspace** (`crates/*`) so the djot semantics can be shared b
 - Run one test: `cargo test -p djot-ls --test document_symbol did_save_does_not_crash_the_server`
 - Test the core lib only: `cargo test -p djot-core`
 - Test the exporter only: `cargo test -p djot-export`
-- Test the filter only: `cargo test -p djot-filter`
+- Test the notes CLI only: `cargo test -p djot-notes`
 - Run exporter manually: `printf '# H\n' | cargo run -p djot-export -- | pandoc -f json -t markdown` (requires `pandoc`)
-- Run filter manually: `cargo run -p djot-filter -- --root docs --query 'title.matches("semantics")'`
-- Filter referenced docs: `cargo run -p djot-filter -- --root notes --query '"index.dj" in directly_referenced_by'`
+- Run notes query manually: `cargo run -p djot-notes -- note --root docs --query 'title.matches("semantics")'`
+- Query referenced docs: `cargo run -p djot-notes -- note --root notes --query '"index.dj" in directly_referenced_by'`
 - Build the Nix package: `nix build .`; the package name is `djot-tools` and
-  installs `djot-ls`, `djot-export`, and `djot-filter`.
+  installs `djot-ls`, `djot-export`, and `djot-notes`.
 - The dev environment is a Nix flake (`use_flake .` via direnv); `dev/envrc` is symlinked to the repo-root `.envrc`.
 - Git hooks live in `dev/hooks/`; enable them once per clone with `git config core.hooksPath dev/hooks`. The `pre-commit` hook runs `cargo check --workspace --all-targets` as the warning gate and checks that `README.md` is still in sync with `README.dj` whenever either is committed.
 
@@ -176,7 +176,7 @@ Four crates in a workspace, split along a deliberate boundary:
 - **`djot-ls` owns everything LSP** (`lsp_types`, `async-lsp`, UTF-16
   positions).
 - **`djot-export` owns the pandoc JSON AST**.
-- **`djot-filter` owns directory filtering CLI behavior**.
+- **`djot-notes` owns the notes/task query and edit CLI behavior**.
 
 All binaries reuse `djot-core` without pulling in each other's types.
 
@@ -187,7 +187,7 @@ in-memory workspace, but it must not read directories, read or write files,
 open editors, speak LSP, render CLI output, or shell out to external tools.
 Callers provide document text and paths, then decide how to apply returned
 edits: `djot-ls` maps byte edits to LSP `TextEdit`s for buffers, while
-`djot-filter` applies byte edits to file contents and writes them back.
+`djot-notes` applies byte edits to file contents and writes them back.
 
 `crates/djot-core/src/lib.rs` (lib, depends on `jotdown`, `chrono`, and
 `serde`):
@@ -220,7 +220,7 @@ edits: `djot-ls` maps byte edits to LSP `TextEdit`s for buffers, while
   transformation. The CLI round-trip requires `pandoc`.
 - Verify with a round-trip: `printf '# H\n' | ./target/debug/djot-export | pandoc -f json -t markdown`.
 
-`crates/djot-filter/src/main.rs` (bin `djot-filter`, depends on `djot-core` + `cel` + `clap` + `shlex` + `skim` + `toml`):
+`crates/djot-notes/src/main.rs` (bin `djot-notes`, depends on `djot-core` + `cel` + `clap` + `shlex` + `skim` + `toml`):
 
 - Recursively scans a root directory for `.dj` / `.djot` files, loads them into
   `djot_core::Workspace`, and prints root-relative paths that match all
@@ -235,7 +235,7 @@ edits: `djot-ls` maps byte edits to LSP `TextEdit`s for buffers, while
   an in-memory ANSI-highlighted preview of the file content instead of a shell
   preview command. The item list highlights paths, while search text remains
   plain `path + full text`.
-  When the user accepts a selection, `djot-filter` opens selected files with
+  When the user accepts a selection, `djot-notes` opens selected files with
   `$EDITOR`; editor arguments are parsed with `shlex` and file paths are passed
   as direct process arguments so spaces are preserved. In skim, `ctrl-n`
   creates a new file from the current query relative to the scan root, rejects
@@ -273,7 +273,7 @@ Pure semantics (`heading_outline`, `build_index`, `parse_dst`,
 `resolve_target`, `Workspace`) are unit-tested directly in `djot-core`
 (`#[cfg(test)] mod tests` in its `lib.rs`) — faster and more precise.
 Exporter behavior is unit-tested in `crates/djot-export/src/main.rs`. Filter
-behavior is unit-tested in `crates/djot-filter/src/main.rs`.
+behavior is unit-tested in `crates/djot-notes/src/main.rs`.
 
 ## Editor testing
 

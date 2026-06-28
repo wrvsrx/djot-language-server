@@ -88,10 +88,10 @@ Current `djot-export` usage and behavior are documented in
 - [ ] grow `djot-export` from a single-document Pandoc JSON bridge into a
   static-site publishing driver when workspace-level export semantics exist
 
-# Filter
+# Notes
 
-Current `djot-filter` usage and query context are documented in
-[the README](../README.dj#Filter). Remaining work:
+Current `djot-notes` usage and query context are documented in
+[the README](../README.dj#Notes). Remaining work:
 
 - [ ] keep stable shorthand flags for common filters if repeated CEL queries
   become too noisy
@@ -107,10 +107,10 @@ Current `djot-filter` usage and query context are documented in
   processes, and edit application.
 - [x] Add a shared `djot-core::Analysis` model that collects anchors,
   references, metadata, task records, and document-local diagnostics from one
-  document parse, so `djot-ls` and `djot-filter` can reuse the same analysis
+  document parse, so `djot-ls` and `djot-notes` can reuse the same analysis
   shape.
 - [x] Move current shared task editing semantics into `djot-core`, so LSP code
-  actions and `djot-filter` task actions use the same source-editing behavior
+  actions and `djot-notes` task actions use the same source-editing behavior
   for completion, cancellation, and recurring-task advancement.
 - [x] Move metadata insertion and native task-list conversion edit planning
   into `djot-core`; LSP code actions only wrap the byte-range edits.
@@ -130,12 +130,12 @@ Current `djot-filter` usage and query context are documented in
     planning into `rename.rs`.
   - [x] `djot-core`: split single-document parsing and `Analysis` construction
     into `analysis.rs`.
-  - [x] `djot-filter`: split CEL query compilation/evaluation into `query.rs`.
-  - [x] `djot-filter`: split task listing and task-editing CLI actions into
+  - [x] `djot-notes`: split CEL query compilation/evaluation into `query.rs`.
+  - [x] `djot-notes`: split task listing and task-editing CLI actions into
     `tasks.rs`.
-  - [x] `djot-filter`: split skim item construction, preview, file creation,
+  - [x] `djot-notes`: split skim item construction, preview, file creation,
     and editor launching into `interactive.rs`.
-  - [x] `djot-filter`: split table/output rendering into `render.rs`.
+  - [x] `djot-notes`: split table/output rendering into `render.rs`.
 
 - [ ] Continue targeted module cleanup where file size now hides ownership
   boundaries:
@@ -219,7 +219,7 @@ support.
   - [ ] code action to reopen a completed or canceled task
   - [x] code action to convert a native Djot task list item into a task div
   - [x] filter tasks by completion state, created datetime, and done/canceled
-    datetime in `djot-filter`
+    datetime in `djot-notes`
 
 - [x] `wait` task metadata for deferred open tasks, including timestamp task
   queries, `now`, and recurring-task advancement
@@ -240,7 +240,7 @@ support.
 - [ ] Add CLI actions for completing, reopening, and recurring tasks:
 
   - [x] Support direct task targets such as `path/to/file.dj#task-id` for
-    `djot-filter task done`.
+    `djot-notes task done`.
   - [x] Add an explicit action for marking a task done.
   - [x] Have `done` advance recurring tasks by appending the next open
     instance.
@@ -250,7 +250,7 @@ support.
   - [ ] Reuse the same core task editing semantics as the LSP code actions so
     CLI and editor behavior stay consistent.
   - Consider batch and interactive forms after the direct action exists, such as
-    applying an action to `djot-filter task --query ...` results or selected
+    applying an action to `djot-notes task --query ...` results or selected
     skim items.
 
 - [ ] Add a local live web UI for task review and actions:
@@ -262,7 +262,7 @@ support.
     blocked, completed, and canceled tasks with title, source, due/wait fields,
     and direct blockers.
   - Let task action buttons apply the same core edits as LSP and
-    `djot-filter`, including complete, cancel, reopen/remove `done`, and
+    `djot-notes`, including complete, cancel, reopen/remove `done`, and
     recurring-task advancement as those edit helpers become available.
   - Keep writes constrained to the configured root, re-read files before
     applying edits to avoid stale page actions, and treat unsaved editor buffers
@@ -296,7 +296,7 @@ support.
     rendering and avoids deciding how to identify anonymous parent tasks.
   - Render nested tasks by default by prefixing the title column with ASCII
     markers, such as `> Child task` and `  > Grandchild task`.
-  - Add `djot-filter task --flat` for callers that want raw titles.
+  - Add `djot-notes task --flat` for callers that want raw titles.
   - Keep output sorted by root-relative path, then by source order within each
     file.
   - Keep table columns unchanged; only the title cell changes in tree mode.
@@ -319,7 +319,7 @@ support.
     explicit dependency edges in blocker columns or focused graph views so
     shared dependencies are not duplicated as tree children.
 
-- [x] Add table headings to `djot-filter task` output before adding richer
+- [x] Add table headings to `djot-notes task` output before adding richer
   blocker columns:
 
   - Keep the status, title, and source columns visually labeled so future

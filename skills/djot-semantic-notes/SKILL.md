@@ -1,6 +1,6 @@
 ---
 name: djot-semantic-notes
-description: Edit Djot note repositories that follow djot-tools semantics. Use when creating, modifying, completing, canceling, recurring, or dependency-linking tasks in .dj/.djot notes; preserving djot-tools task attributes and reference spelling; or helping an LLM operate on notes written for djot-ls, djot-filter, or djot-export.
+description: Edit Djot note repositories that follow djot-tools semantics. Use when creating, modifying, completing, canceling, recurring, or dependency-linking tasks in .dj/.djot notes; preserving djot-tools task attributes and reference spelling; or helping an LLM operate on notes written for djot-ls, djot-notes, or djot-export.
 ---
 
 # Djot Semantic Notes

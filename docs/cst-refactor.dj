@@ -159,7 +159,7 @@ review after Slice 1.
   `cst::closed_link_at`, and `cst::plain_str_at` cover the remaining direct
   jotdown uses (title slugging, completion's link/text cursor queries). Result:
   no source outside the `cst` module names jotdown, and only `djot-core` (via
-  `cst`) depends on the crate — `djot-ls` and `djot-filter` dropped it. This is
+  `cst`) depends on the crate — `djot-ls` and `djot-notes` dropped it. This is
   the seam for an eventual standalone `djot-syntax` crate and a future
   error-tolerant parse that could fold in `completion.rs`'s incomplete-link
   scanner.

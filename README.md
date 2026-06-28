@@ -2,12 +2,12 @@
 
 A Rust toolkit for [Djot](https://djot.net) markup. It includes a
 [Language Server](https://microsoft.github.io/language-server-protocol/), an
-exporter that produces pandoc JSON, and a directory filter CLI for Djot notes.
-The shared semantic engine parses documents with
+exporter that produces pandoc JSON, and a CLI for querying and operating on
+Djot notes. The shared semantic engine parses documents with
 [`jotdown`](https://github.com/hellux/jotdown); the language server speaks LSP
 over stdio via [`async-lsp`](https://github.com/oxalica/async-lsp).
 
-The binaries are `djot-ls`, `djot-export`, and `djot-filter`. They handle
+The binaries are `djot-ls`, `djot-export`, and `djot-notes`. They handle
 `.dj` / `.djot` files.
 
 *This README is generated from `README.dj` with this project’s own exporter:*
@@ -72,16 +72,17 @@ applies this project’s export semantics: a `{.metadata}` toml block is lifted
 out of the rendered body and folded into pandoc metadata rather than printed as
 a code block.
 
-## Filter
+## Notes
 
-`djot-filter` scans a directory of `.dj` / `.djot` files and prints files that
-match all filters. If no directory is given, it scans the current directory:
+`djot-notes` scans a directory of `.dj` / `.djot` files to query and operate on
+Djot notes and tasks. The `note` subcommand prints files that match all
+filters. If no directory is given, it scans the current directory:
 
 ``` sh
-djot-filter note --query 'title.matches("semantics")'
-djot-filter note --root docs --query 'title.matches("semantics")'
-djot-filter note --root notes --query '"index.dj" in transitively_referenced_by'
-djot-filter note --root notes --query 'path.startsWith("docs/")' --interactive
+djot-notes note --query 'title.matches("semantics")'
+djot-notes note --root docs --query 'title.matches("semantics")'
+djot-notes note --root notes --query '"index.dj" in transitively_referenced_by'
+djot-notes note --root notes --query 'path.startsWith("docs/")' --interactive
 ```
 
 `--query EXPR` keeps files whose CEL expression evaluates to true. The query
@@ -107,10 +108,10 @@ file. Task queries expose `path`, `id`, `title`, `created`, `due`, `wait`,
 CEL timestamps, so time comparisons work across timezone offsets:
 
 ``` sh
-djot-filter task --query 'actionable'
-djot-filter task --query 'blocked'
-djot-filter task --flat
-djot-filter task done notes/tasks.dj#write-parser
+djot-notes task --query 'actionable'
+djot-notes task --query 'blocked'
+djot-notes task --flat
+djot-notes task done notes/tasks.dj#write-parser
 ```
 
 `task done` marks explicit task targets done in-place. Targets use the same
@@ -184,8 +185,9 @@ A Cargo workspace with four crates:
 - [`crates/djot-export`](crates/djot-export) – the `djot-export` CLI; it uses
   Pandoc’s native Djot reader and applies project-specific export semantics to
   the resulting pandoc JSON AST.
-- [`crates/djot-filter`](crates/djot-filter) – the `djot-filter` CLI; it
-  filters directories of djot documents by references and string metadata.
+- [`crates/djot-notes`](crates/djot-notes) – the `djot-notes` CLI; it queries
+  directories of djot documents by references and string metadata, and operates
+  on their tasks.
 
 For the design rationale (the async-lsp `&mut self`/no-lock state model, the
 core/LSP boundary) and project-specific gotchas, see [`AGENTS.md`](AGENTS.md).

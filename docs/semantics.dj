@@ -46,7 +46,7 @@ minimal:
 
 `djot-export` folds this TOML into pandoc metadata instead of rendering the
 block as body content; Pandoc's native Djot reader handles the underlying syntax
-conversion. `djot-filter` can match string metadata fields by key; dotted keys
+conversion. `djot-notes` can match string metadata fields by key; dotted keys
 traverse TOML tables.
 
 Current implementation note: tools use the first code block carrying the
