@@ -11,22 +11,22 @@ This small set of documents is meant for manual testing and demos.
 - [Language server playground](djot-ls.dj)
 - [Metadata code-action scratchpad](metadata-scratch.dj)
 - [Exporter playground](djot-export.dj)
-- [Filter playground](djot-filter.dj)
+- [Notes playground](djot-notes.dj)
 
 # Suggested commands
 
 ``` sh
 cargo build
 djot-export examples/djot-export.dj | pandoc -f json -t markdown
-djot-filter note --root examples --query 'title.matches("playground")'
-djot-filter note --root examples --query '"index.dj" in directly_referenced_by'
-djot-filter task --root examples --flat
-djot-filter task --root examples --query 'created != null && done == null'
-djot-filter task --root examples --query 'actionable'
-djot-filter task --root examples --query 'blocked'
-djot-filter task --root examples --query 'done != null'
-djot-filter task --root examples --query 'canceled != null'
+djot-notes note --root examples --query 'title.matches("playground")'
+djot-notes note --root examples --query '"index.dj" in directly_referenced_by'
+djot-notes task --root examples --flat
+djot-notes task --root examples --query 'created != null && done == null'
+djot-notes task --root examples --query 'actionable'
+djot-notes task --root examples --query 'blocked'
+djot-notes task --root examples --query 'done != null'
+djot-notes task --root examples --query 'canceled != null'
 ```
 
 The three linked files intentionally cross-reference each other so
-`djot-filter` reverse-reference queries have useful output.
+`djot-notes` reverse-reference queries have useful output.

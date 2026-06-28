@@ -22,7 +22,7 @@ references:
 - Same-file heading: [Document symbols](#Document-symbols)
 - Same-file explicit anchor: [local anchor](#local-anchor)
 - Cross-file heading: [Exporter features](djot-export.dj#Exporter-features)
-- Cross-file file target: [Filter playground](djot-filter.dj)
+- Cross-file file target: [Notes playground](djot-notes.dj)
 - Repeated reference: [Exporter features](djot-export.dj#Exporter-features)
 
 {#local-anchor}
@@ -34,7 +34,7 @@ links that point to it.
 Try these edits in insert mode:
 
 - Start a new link label with `[` and complete `Exporter playground`.
-- Complete a path inside `[target](` with `djot-filter.dj`.
+- Complete a path inside `[target](` with `djot-notes.dj`.
 - Complete an anchor after `[target](djot-export.dj#` with `Exporter-features`.
 - Complete a same-file anchor after `[target](#` with `Code-actions`.
 

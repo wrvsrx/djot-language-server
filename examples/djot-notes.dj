@@ -1,10 +1,10 @@
 {.metadata}
 ``` toml
-title = "djot-filter playground"
+title = "djot-notes playground"
 area = "examples"
 ```
 
-This file demonstrates data that `djot-filter` can query: paths, metadata
+This file demonstrates data that `djot-notes` can query: paths, metadata
 titles, reverse references, and task blocks.
 
 # Notes queries
@@ -12,10 +12,10 @@ titles, reverse references, and task blocks.
 Try these from the repository root:
 
 ``` sh
-djot-filter note --root examples --query 'title.matches("playground")'
-djot-filter note --root examples --query 'path.endsWith("djot-ls.dj")'
-djot-filter note --root examples --query '"index.dj" in directly_referenced_by'
-djot-filter note --root examples --query '"djot-ls.dj" in transitively_referenced_by'
+djot-notes note --root examples --query 'title.matches("playground")'
+djot-notes note --root examples --query 'path.endsWith("djot-ls.dj")'
+djot-notes note --root examples --query '"index.dj" in directly_referenced_by'
+djot-notes note --root examples --query '"djot-ls.dj" in transitively_referenced_by'
 ```
 
 `directly_referenced_by` and `transitively_referenced_by` contain
@@ -24,7 +24,7 @@ root-relative paths of documents that link to the current document.
 # Interactive mode
 
 ``` sh
-EDITOR=nvim djot-filter note --root examples --interactive
+EDITOR=nvim djot-notes note --root examples --interactive
 ```
 
 In interactive mode, the preview is generated in memory and `ctrl-n` creates a
@@ -36,13 +36,13 @@ This section includes plain task divs and the list-shaped task format generated
 by the `djot-ls` "Convert to task div" code action.
 
 ``` sh
-djot-filter task --root examples
-djot-filter task --root examples --flat
-djot-filter task --root examples --query 'created != null && done == null'
-djot-filter task --root examples --query 'actionable'
-djot-filter task --root examples --query 'blocked'
-djot-filter task --root examples --query 'done != null'
-djot-filter task --root examples --query 'canceled != null'
+djot-notes task --root examples
+djot-notes task --root examples --flat
+djot-notes task --root examples --query 'created != null && done == null'
+djot-notes task --root examples --query 'actionable'
+djot-notes task --root examples --query 'blocked'
+djot-notes task --root examples --query 'done != null'
+djot-notes task --root examples --query 'canceled != null'
 ```
 
 {#try-task-query}
