@@ -45,6 +45,8 @@
                 cargo
                 rustc
                 rustfmt
+
+                pandoc
               ];
             };
             formatter = pkgs.nixfmt-rfc-style;
