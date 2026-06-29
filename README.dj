@@ -76,6 +76,10 @@ applies this project's export semantics:
 
 - a `{.metadata}` toml block is lifted out of the rendered body and folded into
   pandoc metadata rather than printed as a code block;
+- every metadata string value is parsed as djot markup, exactly as pandoc parses
+  YAML metadata scalars, so a `title` (or any field) may contain emphasis, math,
+  or a `[@key]{.cite}` citation; booleans stay boolean and a multi-paragraph
+  value becomes block metadata;
 - a `[X]{.cite}` span becomes a pandoc `Cite` node, where `X` is exactly a
   pandoc-markdown citation: `[@smith2004]{.cite}`, `[-@smith2004]{.cite}`,
   `[@smith2004, pp. 33-35]{.cite}`, `[see @smith2004]{.cite}`, and
