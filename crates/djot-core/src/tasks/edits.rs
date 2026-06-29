@@ -97,10 +97,13 @@ pub fn task_status_edits_at(
     task_status_edits_for_task(text, task, status, timestamp, true)
 }
 
-pub fn task_done_edits_by_id(
+/// Build the edits that set `status` (done or canceled) on the task with `id`,
+/// stamping `timestamp`. Errors if the task is missing or already resolved.
+pub fn task_status_edits_by_id(
     text: &str,
     id: &str,
-    done: &str,
+    status: TaskStatus,
+    timestamp: &str,
 ) -> Result<Vec<TextEdit>, TaskEditError> {
     let analysis = analyze(text);
     let task = analysis
@@ -115,7 +118,7 @@ pub fn task_done_edits_by_id(
         return Err(TaskEditError::TaskCanceled { id: id.to_string() });
     }
 
-    task_status_edits_for_task(text, task, TaskStatus::Done, done, false)
+    task_status_edits_for_task(text, task, status, timestamp, false)
         .map(|edit| edit.edits)
         .ok_or_else(|| TaskEditError::CannotBuildEdit { id: id.to_string() })
 }

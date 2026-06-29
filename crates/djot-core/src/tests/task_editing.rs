@@ -140,9 +140,9 @@ fn tasks_reject_date_only_datetime_attributes() {
 }
 
 #[test]
-fn task_done_edits_by_id_mark_task_done() {
+fn task_status_edits_by_id_mark_task_done() {
     let text = "{#write-parser}\n::: task\nWrite parser.\n:::\n";
-    let edits = task_done_edits_by_id(text, "write-parser", "2026-06-22T09:00:00+08:00").unwrap();
+    let edits = task_status_edits_by_id(text, "write-parser", TaskStatus::Done, "2026-06-22T09:00:00+08:00").unwrap();
     let updated = apply_text_edits(text.to_string(), edits).unwrap();
 
     assert_eq!(
@@ -201,7 +201,7 @@ fn completing_outer_task_from_inside_done_nested_task_marks_outer_fence() {
 #[test]
 fn recurring_list_task_with_trailing_blank_line_creates_next_list_item() {
     let text = "- {#daily created=\"2026-06-24T01:13:36+08:00\"}\n  {recur=\"P1D\"}\n  {due=\"2026-06-24T01:13:45+08:00\"}\n  ::: task\n  a task\n  :::\n\n";
-    let edits = task_done_edits_by_id(text, "daily", "2026-06-24T01:14:00+08:00").unwrap();
+    let edits = task_status_edits_by_id(text, "daily", TaskStatus::Done, "2026-06-24T01:14:00+08:00").unwrap();
     let updated = apply_text_edits(text.to_string(), edits).unwrap();
 
     assert!(updated.contains("\n- {#a-task-2026-06-25}\n"));
@@ -212,7 +212,7 @@ fn recurring_list_task_with_trailing_blank_line_creates_next_list_item() {
 #[test]
 fn recurring_list_task_before_heading_creates_next_list_item() {
     let text = "- {#daily created=\"2026-06-25T00:18:28+08:00\"}\n  {recur=\"P1D\"}\n  {due=\"2026-06-25T00:18:42+08:00\"}\n  ::: task\n  task 1\n  :::\n\n# some headings\n";
-    let edits = task_done_edits_by_id(text, "daily", "2026-06-25T00:19:00+08:00").unwrap();
+    let edits = task_status_edits_by_id(text, "daily", TaskStatus::Done, "2026-06-25T00:19:00+08:00").unwrap();
     let updated = apply_text_edits(text.to_string(), edits).unwrap();
 
     assert_eq!(
@@ -224,7 +224,7 @@ fn recurring_list_task_before_heading_creates_next_list_item() {
 #[test]
 fn recurring_list_task_at_file_end_reuses_final_newline() {
     let text = "- {#daily created=\"2026-06-25T00:18:28+08:00\"}\n  {recur=\"P1D\"}\n  {due=\"2026-06-25T00:18:42+08:00\"}\n  ::: task\n  task 2\n  :::\n";
-    let edits = task_done_edits_by_id(text, "daily", "2026-06-25T00:19:00+08:00").unwrap();
+    let edits = task_status_edits_by_id(text, "daily", TaskStatus::Done, "2026-06-25T00:19:00+08:00").unwrap();
     let updated = apply_text_edits(text.to_string(), edits).unwrap();
 
     assert_eq!(

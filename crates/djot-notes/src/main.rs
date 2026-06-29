@@ -22,7 +22,7 @@ pub(crate) use query::{retain_query_matches, QueryPlan};
 pub(crate) use render::print_paths;
 #[cfg(test)]
 pub(crate) use task_ops::{
-    complete_task_target, task_matches, task_output_record, TaskOutputRecord,
+    set_task_status_target, task_matches, task_output_record, TaskOutputRecord,
 };
 pub(crate) use task_ops::{print_tasks, run_task_action};
 
@@ -167,13 +167,15 @@ struct TaskConfig {
 
 #[derive(Debug, Subcommand)]
 enum TaskAction {
-    /// Mark task targets done. Recurring tasks advance to the next instance by default.
-    Done(TaskDoneConfig),
+    /// Mark task targets complete. Recurring tasks advance to the next instance by default.
+    Complete(TaskTargetsConfig),
+    /// Mark task targets canceled.
+    Cancel(TaskTargetsConfig),
 }
 
 #[derive(Debug, Args)]
-struct TaskDoneConfig {
-    /// Task targets to complete, written as path.dj#task-id.
+struct TaskTargetsConfig {
+    /// Task targets, written as path.dj#task-id.
     #[arg(value_name = "TARGET", required = true)]
     targets: Vec<String>,
 }
@@ -274,7 +276,7 @@ pub(crate) fn display_path(root: &Path, path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use djot_core::tasks;
+    use djot_core::{tasks, TaskStatus};
     use skim::SkimItem;
 
     #[test]
@@ -359,17 +361,31 @@ mod tests {
     }
 
     #[test]
-    fn task_done_subcommand_accepts_targets() {
-        let config = Config::parse_from(["djot-notes", "task", "done", "tasks.dj#write-parser"]);
+    fn task_complete_subcommand_accepts_targets() {
+        let config = Config::parse_from(["djot-notes", "task", "complete", "tasks.dj#write-parser"]);
 
         let CommandMode::Task(TaskConfig {
-            action: Some(TaskAction::Done(done)),
+            action: Some(TaskAction::Complete(complete)),
             ..
         }) = config.command
         else {
-            panic!("expected task done config");
+            panic!("expected task complete config");
         };
-        assert_eq!(done.targets, vec!["tasks.dj#write-parser"]);
+        assert_eq!(complete.targets, vec!["tasks.dj#write-parser"]);
+    }
+
+    #[test]
+    fn task_cancel_subcommand_accepts_targets() {
+        let config = Config::parse_from(["djot-notes", "task", "cancel", "tasks.dj#write-parser"]);
+
+        let CommandMode::Task(TaskConfig {
+            action: Some(TaskAction::Cancel(cancel)),
+            ..
+        }) = config.command
+        else {
+            panic!("expected task cancel config");
+        };
+        assert_eq!(cancel.targets, vec!["tasks.dj#write-parser"]);
     }
 
     #[test]
@@ -556,17 +572,46 @@ mod tests {
     }
 
     #[test]
-    fn task_done_target_marks_task_done() {
-        let root = unique_test_dir("djot-notes-task-done-test");
+    fn task_complete_target_marks_task_done() {
+        let root = unique_test_dir("djot-notes-task-complete-test");
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("tasks.dj");
         std::fs::write(&path, "{#write-parser}\n::: task\nWrite parser.\n:::\n").unwrap();
 
-        complete_task_target(&root, "tasks.dj#write-parser", "2026-06-22T09:00:00+08:00").unwrap();
+        set_task_status_target(
+            &root,
+            "tasks.dj#write-parser",
+            TaskStatus::Done,
+            "2026-06-22T09:00:00+08:00",
+        )
+        .unwrap();
 
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
             "{#write-parser}\n{done=\"2026-06-22T09:00:00+08:00\"}\n::: task\nWrite parser.\n:::\n"
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn task_cancel_target_marks_task_canceled() {
+        let root = unique_test_dir("djot-notes-task-cancel-test");
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("tasks.dj");
+        std::fs::write(&path, "{#write-parser}\n::: task\nWrite parser.\n:::\n").unwrap();
+
+        set_task_status_target(
+            &root,
+            "tasks.dj#write-parser",
+            TaskStatus::Canceled,
+            "2026-06-22T09:00:00+08:00",
+        )
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "{#write-parser}\n{canceled=\"2026-06-22T09:00:00+08:00\"}\n::: task\nWrite parser.\n:::\n"
         );
 
         let _ = std::fs::remove_dir_all(root);
@@ -583,7 +628,13 @@ mod tests {
         )
         .unwrap();
 
-        complete_task_target(&root, "tasks.dj#weekly-review", "2026-06-22T09:00:00+08:00").unwrap();
+        set_task_status_target(
+            &root,
+            "tasks.dj#weekly-review",
+            TaskStatus::Done,
+            "2026-06-22T09:00:00+08:00",
+        )
+        .unwrap();
 
         let updated = std::fs::read_to_string(&path).unwrap();
         assert!(updated.contains("{done=\"2026-06-22T09:00:00+08:00\"}\n::: task"));

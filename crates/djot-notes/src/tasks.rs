@@ -2,8 +2,8 @@ use std::path::Path;
 
 use chrono::{DateTime, FixedOffset, Local, SecondsFormat};
 use djot_core::{
-    apply_text_edits, task_done_edits_by_id, tasks, EditError, Task, TaskEditError, TaskRef,
-    Workspace,
+    apply_text_edits, task_status_edits_by_id, tasks, EditError, Task, TaskEditError, TaskRef,
+    TaskStatus, Workspace,
 };
 
 use crate::query::{QueryPlan, TaskRecord};
@@ -41,24 +41,30 @@ pub(crate) fn print_tasks(
 }
 
 pub(crate) fn run_task_action(root: &Path, action: &TaskAction) -> Result<(), String> {
-    match action {
-        TaskAction::Done(config) => {
-            let done = Local::now()
-                .fixed_offset()
-                .to_rfc3339_opts(SecondsFormat::Secs, true);
-            for target in &config.targets {
-                complete_task_target(root, target, &done)?;
-            }
-            Ok(())
-        }
+    let (status, targets) = match action {
+        TaskAction::Complete(config) => (TaskStatus::Done, &config.targets),
+        TaskAction::Cancel(config) => (TaskStatus::Canceled, &config.targets),
+    };
+    let timestamp = Local::now()
+        .fixed_offset()
+        .to_rfc3339_opts(SecondsFormat::Secs, true);
+    for target in targets {
+        set_task_status_target(root, target, status, &timestamp)?;
     }
+    Ok(())
 }
 
-pub(crate) fn complete_task_target(root: &Path, target: &str, done: &str) -> Result<(), String> {
+pub(crate) fn set_task_status_target(
+    root: &Path,
+    target: &str,
+    status: TaskStatus,
+    timestamp: &str,
+) -> Result<(), String> {
     let task_ref = parse_task_target(root, target)?;
     let text = std::fs::read_to_string(&task_ref.path)
         .map_err(|err| format!("cannot read {}: {err}", task_ref.path.display()))?;
-    let edits = task_done_edits_by_id(&text, &task_ref.id, done).map_err(task_edit_error)?;
+    let edits =
+        task_status_edits_by_id(&text, &task_ref.id, status, timestamp).map_err(task_edit_error)?;
     let updated = apply_text_edits(text, edits).map_err(edit_error)?;
     std::fs::write(&task_ref.path, updated)
         .map_err(|err| format!("cannot write {}: {err}", task_ref.path.display()))
@@ -69,7 +75,9 @@ fn task_edit_error(err: TaskEditError) -> String {
         TaskEditError::TaskIdNotFound { id } => format!("task id not found: {id}"),
         TaskEditError::TaskAlreadyDone { id } => format!("task is already done: {id}"),
         TaskEditError::TaskCanceled { id } => format!("task is canceled: {id}"),
-        TaskEditError::CannotBuildEdit { id } => format!("cannot build done edit for task: {id}"),
+        TaskEditError::CannotBuildEdit { id } => {
+            format!("cannot build status edit for task: {id}")
+        }
     }
 }
 

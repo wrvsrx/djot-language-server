@@ -119,7 +119,7 @@ fn workspace_fixture_covers_diagnostics_and_edit_plans() {
         WorkspaceEdit::RenameFile(_) => false,
     }));
 
-    let edits = task_done_edits_by_id(fixture.index_text, "open", "2026-06-19T09:00:00Z").unwrap();
+    let edits = task_status_edits_by_id(fixture.index_text, "open", TaskStatus::Done, "2026-06-19T09:00:00Z").unwrap();
     let updated = apply_text_edits(fixture.index_text.to_string(), edits).unwrap();
     assert!(updated.contains("{done=\"2026-06-19T09:00:00Z\"}"));
 }

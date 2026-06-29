@@ -5,7 +5,7 @@ mod recurrence;
 
 #[cfg(test)]
 pub(crate) use attributes::{anchor_attribute, filter_recurring_instance_attributes};
-pub use edits::{task_done_edits_by_id, task_list_item_conversion_edit, task_status_edits_at};
+pub use edits::{task_list_item_conversion_edit, task_status_edits_at, task_status_edits_by_id};
 pub use model::{
     ResolvedTaskDependency, Task, TaskDependency, TaskEditError, TaskRef, TaskStatus,
     TaskStatusEdit,

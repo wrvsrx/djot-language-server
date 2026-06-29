@@ -31,9 +31,9 @@ pub use rename::{PathRenameError, PathRenameTarget, RenameTarget, RenameTargetEr
 #[cfg(test)]
 pub(crate) use tasks::{anchor_attribute, filter_recurring_instance_attributes};
 pub use tasks::{
-    next_recur_due, parse_repeat_rule, task_done_edits_by_id, task_list_item_conversion_edit,
-    task_status_edits_at, RepeatRule, ResolvedTaskDependency, Task, TaskDependency, TaskEditError,
-    TaskRef, TaskStatus, TaskStatusEdit,
+    next_recur_due, parse_repeat_rule, task_list_item_conversion_edit, task_status_edits_at,
+    task_status_edits_by_id, RepeatRule, ResolvedTaskDependency, Task, TaskDependency,
+    TaskEditError, TaskRef, TaskStatus, TaskStatusEdit,
 };
 pub use workspace::{DocEntry, Workspace};
 
