@@ -85,6 +85,18 @@ Current `djot-export` usage and behavior are documented in
 [the README](../README.dj#Export). Remaining work:
 
 - [ ] richer metadata: render `author`/`date` (e.g. a byline), nested tables
+- [ ] document-level math macros: let a `math_macros` metadata field (entries of
+  `[name, expansion, nargs]`) define macros that apply across the whole document
+  and survive to every output format. Plan: a pandoc filter (extend
+  `pandoc-filters`' `add-macros`, currently HTML-only) that injects both an HTML
+  MathJax `tex.macros` config (`RawBlock "html"`) and a LaTeX `\newcommand`
+  preamble (`RawBlock "latex"`) into `header-includes`, so pandoc selects the
+  right one per output format. It must append to any existing `header-includes`
+  instead of overwriting, and accept both `MetaString` (how `djot-export`'s
+  metadata fold emits the entries) and `MetaInlines` (pandoc-native YAML). Open
+  question: keep this in a pandoc filter or bake it into `djot-export`'s metadata
+  handling. A renderer-independent alternative is expanding the macros into the
+  `Math` nodes directly, at the cost of a small TeX macro expander.
 - [ ] grow `djot-export` from a single-document Pandoc JSON bridge into a
   static-site publishing driver when workspace-level export semantics exist
 
