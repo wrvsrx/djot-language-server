@@ -315,21 +315,20 @@ support.
   - Leave richer fields such as `parent`, `children`, and `has_open_children`
     for a later semantic pass.
 
-- [ ] Unify nested subtasks and explicit task dependencies as blocker edges:
+- [ ] Keep nested subtasks distinct from explicit task dependencies:
 
-  - Treat a nested task as creating a blocker edge from the parent task to the
-    child task, the same blocker graph used by explicit `depends` attributes.
-  - Keep edge provenance, such as nested structure versus `depends`, for
-    diagnostics, display projection, and edit generation rather than for
-    separate blocking semantics.
-  - Let `blocked`, `actionable`, `blocked_by`, `directly_blocking`, cycle
-    diagnostics, and task filtering use the unified blocker graph.
-  - Allow anonymous nested tasks to block their parent using document-local
-    identity such as source range, while keeping explicit `depends` targets
-    restricted to anchored tasks.
-  - Display nested blocker edges in the title tree by default, and display
-    explicit dependency edges in blocker columns or focused graph views so
-    shared dependencies are not duplicated as tree children.
+  - Treat nested `task` divs as composition: the child task is part of the
+    parent task's breakdown and belongs in tree-shaped display.
+  - Treat `depends` as an execution constraint: dependency targets determine
+    whether a task is `blocked` or `actionable`.
+  - Do not make a nested child block its parent merely because of document
+    structure. If a parent should wait for a child, add an explicit `depends`
+    edge to represent that scheduling constraint.
+  - Future parent/child fields such as `parent`, `children`, and
+    `has_open_children` should describe composition, not dependency state.
+  - Keep dependency diagnostics, cycle checks, `directly_blocking`, `blocked`,
+    `actionable`, and dependency filtering based on explicit `depends`
+    references.
 
 - [x] Add table headings to `djot-notes task` output before adding richer
   blocker columns:
