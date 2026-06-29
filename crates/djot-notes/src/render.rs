@@ -2,10 +2,13 @@ use comfy_table::{presets::NOTHING, ContentArrangement, Table};
 
 use crate::task_ops::TaskOutputRecord;
 
+const TASK_TABLE_WIDTH: u16 = 100;
+
 pub(crate) fn task_table(records: &[TaskOutputRecord], heading: bool) -> String {
     let mut table = Table::new();
     table
         .load_preset(NOTHING)
+        .set_width(TASK_TABLE_WIDTH)
         .set_content_arrangement(ContentArrangement::Dynamic);
     if heading {
         table.set_header(["S", "Task", "Source"]);
