@@ -66,13 +66,7 @@ fn to_pandoc_json(text: &str) -> Result<String, String> {
     let mut value: Value =
         serde_json::from_str(&json).map_err(|err| format!("cannot parse pandoc JSON: {err}"))?;
 
-    let mut texts = Vec::new();
-    collect_cite_texts(&value, &mut texts);
-    if !texts.is_empty() {
-        let cites = parse_citations_via_pandoc(&texts)?;
-        let mut idx = 0;
-        replace_cite_spans(&mut value, &cites, &mut idx);
-    }
+    convert_cite_spans_in(&mut value)?;
 
     let mut document: Pandoc = serde_json::from_value(value)
         .map_err(|err| format!("cannot parse pandoc JSON: {err}"))?;
@@ -113,6 +107,19 @@ fn run_pandoc(args: &[&str], input: &str) -> Result<String, String> {
     }
 
     String::from_utf8(output.stdout).map_err(|err| format!("pandoc wrote non-UTF-8 JSON: {err}"))
+}
+
+/// Rewrite every `[X]{.cite}` span anywhere in `value` (body or metadata) into a
+/// pandoc `Cite` node, by delegating the parsing of each `X` to pandoc.
+fn convert_cite_spans_in(value: &mut Value) -> Result<(), String> {
+    let mut texts = Vec::new();
+    collect_cite_texts(value, &mut texts);
+    if !texts.is_empty() {
+        let cites = parse_citations_via_pandoc(&texts)?;
+        let mut idx = 0;
+        replace_cite_spans(value, &cites, &mut idx);
+    }
+    Ok(())
 }
 
 /// If `value` is a `[X]{.cite}` span, return its inline-content `Value` (`X`).
@@ -237,6 +244,15 @@ fn parse_citations_via_pandoc(texts: &[String]) -> Result<Vec<Option<Value>>, St
 }
 
 fn fold_metadata_block(document: &mut Pandoc) {
+    fold_metadata_block_with(document, parse_meta_scalars);
+}
+
+/// Fold the first `{.metadata}` TOML block into `document.meta`. Every scalar
+/// value is parsed as djot markup by `parse_batch` (one call for all scalars),
+/// mirroring how pandoc parses YAML metadata scalars as Markdown; booleans stay
+/// `MetaBool` and containers recurse. `parse_batch` is injected so the folding
+/// logic is testable without shelling out to pandoc.
+fn fold_metadata_block_with(document: &mut Pandoc, parse_batch: impl Fn(&[String]) -> Vec<MetaValue>) {
     let mut found = None;
     document.blocks.retain(|block| {
         if found.is_none() {
@@ -256,8 +272,116 @@ fn fold_metadata_block(document: &mut Pandoc) {
     let Ok(table) = toml::from_str::<toml::Table>(&metadata) else {
         return;
     };
+
+    let mut texts = Vec::new();
+    for value in table.values() {
+        collect_meta_scalars(value, &mut texts);
+    }
+    let mut parsed = parse_batch(&texts).into_iter();
     for (key, value) in table {
-        document.meta.insert(key, toml_to_meta(value));
+        document.meta.insert(key, rebuild_meta(value, &mut parsed));
+    }
+}
+
+/// Collect the stringified scalar values of a TOML metadata value, depth-first.
+/// Booleans and container shells are skipped; only the scalars that need djot
+/// parsing are emitted. Must walk in lockstep with [`rebuild_meta`].
+fn collect_meta_scalars(value: &toml::Value, out: &mut Vec<String>) {
+    match value {
+        toml::Value::String(s) => out.push(s.clone()),
+        toml::Value::Integer(n) => out.push(n.to_string()),
+        toml::Value::Float(n) => out.push(n.to_string()),
+        toml::Value::Datetime(d) => out.push(d.to_string()),
+        toml::Value::Boolean(_) => {}
+        toml::Value::Array(items) => items.iter().for_each(|v| collect_meta_scalars(v, out)),
+        toml::Value::Table(table) => table.values().for_each(|v| collect_meta_scalars(v, out)),
+    }
+}
+
+/// Rebuild a `MetaValue` from a TOML value, drawing each scalar's parsed
+/// `MetaValue` from `parsed` in the same depth-first order [`collect_meta_scalars`]
+/// produced. Booleans become `MetaBool`; arrays/tables recurse.
+fn rebuild_meta(value: toml::Value, parsed: &mut impl Iterator<Item = MetaValue>) -> MetaValue {
+    match value {
+        toml::Value::String(_)
+        | toml::Value::Integer(_)
+        | toml::Value::Float(_)
+        | toml::Value::Datetime(_) => parsed.next().unwrap_or(MetaValue::MetaString(String::new())),
+        toml::Value::Boolean(b) => MetaValue::MetaBool(b),
+        toml::Value::Array(items) => {
+            MetaValue::MetaList(items.into_iter().map(|v| rebuild_meta(v, parsed)).collect())
+        }
+        toml::Value::Table(table) => MetaValue::MetaMap(
+            table
+                .into_iter()
+                .map(|(key, value)| (key, rebuild_meta(value, parsed)))
+                .collect::<HashMap<_, _>>(),
+        ),
+    }
+}
+
+/// Parse each metadata scalar `text` as djot via a single pandoc call, returning
+/// one `MetaValue` per input in order (`MetaInlines` for a lone paragraph, else
+/// `MetaBlocks`; cite spans resolved). On any failure every scalar falls back to
+/// a verbatim `MetaString`.
+fn parse_meta_scalars(texts: &[String]) -> Vec<MetaValue> {
+    if texts.is_empty() {
+        return Vec::new();
+    }
+    parse_meta_scalars_inner(texts)
+        .unwrap_or_else(|_| texts.iter().map(|t| MetaValue::MetaString(t.clone())).collect())
+}
+
+fn parse_meta_scalars_inner(texts: &[String]) -> Result<Vec<MetaValue>, String> {
+    // Wrap each scalar in a fenced div so one pandoc call can parse them all and
+    // be split back apart, even when a value spans multiple blocks. The fence is
+    // longer than any colon run in the inputs so content cannot close it early.
+    let max_colons = texts
+        .iter()
+        .flat_map(|text| text.lines())
+        .map(|line| line.chars().take_while(|&c| c == ':').count())
+        .max()
+        .unwrap_or(0);
+    let fence = ":".repeat(max_colons.max(2) + 3);
+    let doc = texts
+        .iter()
+        .map(|text| format!("{fence} meta\n{text}\n{fence}"))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
+    let json = run_pandoc(&["-f", "djot", "-t", "json"], &doc)?;
+    let mut value: Value =
+        serde_json::from_str(&json).map_err(|err| format!("cannot parse pandoc JSON: {err}"))?;
+    convert_cite_spans_in(&mut value)?;
+    let document: Pandoc = serde_json::from_value(value)
+        .map_err(|err| format!("cannot parse pandoc JSON: {err}"))?;
+    if document.blocks.len() != texts.len() {
+        return Err(format!(
+            "expected {} metadata divs from pandoc, got {}",
+            texts.len(),
+            document.blocks.len()
+        ));
+    }
+    document
+        .blocks
+        .into_iter()
+        .zip(texts)
+        .map(|(block, text)| match block {
+            Block::Div(_, inner) => Ok(blocks_to_meta(inner, text)),
+            _ => Err("metadata batch produced a non-div block".to_string()),
+        })
+        .collect()
+}
+
+/// Reduce parsed blocks to a `MetaValue`: a lone `Para`/`Plain` unwraps to
+/// `MetaInlines`; an empty parse falls back to `MetaString(fallback)`; anything
+/// else stays `MetaBlocks`.
+fn blocks_to_meta(blocks: Vec<Block>, fallback: &str) -> MetaValue {
+    match <[Block; 1]>::try_from(blocks) {
+        Ok([Block::Para(inlines) | Block::Plain(inlines)]) => MetaValue::MetaInlines(inlines),
+        Ok([block]) => MetaValue::MetaBlocks(vec![block]),
+        Err(blocks) if blocks.is_empty() => MetaValue::MetaString(fallback.to_string()),
+        Err(blocks) => MetaValue::MetaBlocks(blocks),
     }
 }
 
@@ -265,33 +389,23 @@ fn has_class(attr: &Attr, class: &str) -> bool {
     attr.classes.iter().any(|candidate| candidate == class)
 }
 
-fn toml_to_meta(value: toml::Value) -> MetaValue {
-    match value {
-        toml::Value::String(s) => MetaValue::MetaString(s),
-        toml::Value::Boolean(b) => MetaValue::MetaBool(b),
-        toml::Value::Integer(n) => MetaValue::MetaString(n.to_string()),
-        toml::Value::Float(n) => MetaValue::MetaString(n.to_string()),
-        toml::Value::Datetime(d) => MetaValue::MetaString(d.to_string()),
-        toml::Value::Array(items) => {
-            MetaValue::MetaList(items.into_iter().map(toml_to_meta).collect())
-        }
-        toml::Value::Table(table) => MetaValue::MetaMap(
-            table
-                .into_iter()
-                .map(|(key, value)| (key, toml_to_meta(value)))
-                .collect::<HashMap<_, _>>(),
-        ),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use pandoc_types::definition::Inline;
 
-    #[test]
-    fn metadata_is_folded_into_meta_and_removed_from_body() {
-        let mut document = Pandoc {
+    fn inlines(text: &str) -> MetaValue {
+        MetaValue::MetaInlines(vec![Inline::Str(text.to_string())])
+    }
+
+    /// Stand-in for the real pandoc-backed batch parser: wraps each scalar as a
+    /// single inline so tests stay pure (no subprocess).
+    fn fake_batch(texts: &[String]) -> Vec<MetaValue> {
+        texts.iter().map(|t| inlines(t)).collect()
+    }
+
+    fn metadata_block(toml: &str) -> Pandoc {
+        Pandoc {
             meta: HashMap::new(),
             blocks: vec![
                 Block::CodeBlock(
@@ -300,20 +414,60 @@ mod tests {
                         classes: vec!["metadata".to_string(), "toml".to_string()],
                         attributes: Vec::new(),
                     },
-                    "title = \"X\"\ndraft = true\n".to_string(),
+                    toml.to_string(),
                 ),
                 Block::Header(1, Attr::default(), vec![Inline::Str("Heading".to_string())]),
             ],
-        };
+        }
+    }
 
-        fold_metadata_block(&mut document);
+    #[test]
+    fn metadata_is_folded_into_meta_and_removed_from_body() {
+        let mut document = metadata_block("title = \"X\"\ndraft = true\n");
 
-        assert_eq!(
-            document.meta.get("title"),
-            Some(&MetaValue::MetaString("X".to_string()))
-        );
+        fold_metadata_block_with(&mut document, fake_batch);
+
+        // scalars are parsed; `draft` (bool) stays a literal MetaBool.
+        assert_eq!(document.meta.get("title"), Some(&inlines("X")));
         assert_eq!(document.meta.get("draft"), Some(&MetaValue::MetaBool(true)));
         assert!(matches!(document.blocks.as_slice(), [Block::Header(..)]));
+    }
+
+    #[test]
+    fn all_scalars_are_parsed_uniformly_with_containers_and_bools_preserved() {
+        let mut document = metadata_block(
+            "title = \"X\"\nbibliography = \"refs.json\"\nauthor = [\"A\", \"B\"]\ndraft = false\n",
+        );
+
+        fold_metadata_block_with(&mut document, fake_batch);
+
+        // every scalar goes through the parser, including the path field and
+        // each list element...
+        assert_eq!(document.meta.get("title"), Some(&inlines("X")));
+        assert_eq!(document.meta.get("bibliography"), Some(&inlines("refs.json")));
+        assert_eq!(
+            document.meta.get("author"),
+            Some(&MetaValue::MetaList(vec![inlines("A"), inlines("B")]))
+        );
+        // ...while booleans are preserved as MetaBool.
+        assert_eq!(document.meta.get("draft"), Some(&MetaValue::MetaBool(false)));
+    }
+
+    #[test]
+    fn blocks_reduce_to_inlines_blocks_or_string() {
+        let para = Block::Para(vec![Inline::Str("hi".to_string())]);
+        assert_eq!(
+            blocks_to_meta(vec![para.clone()], "hi"),
+            MetaValue::MetaInlines(vec![Inline::Str("hi".to_string())])
+        );
+        assert!(matches!(
+            blocks_to_meta(vec![para.clone(), para], "x"),
+            MetaValue::MetaBlocks(_)
+        ));
+        assert_eq!(
+            blocks_to_meta(vec![], "fallback"),
+            MetaValue::MetaString("fallback".to_string())
+        );
     }
 
     #[test]
