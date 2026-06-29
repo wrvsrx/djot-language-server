@@ -10,7 +10,7 @@ drift.
 
 # Features
 
-- [ ] Stabilization priorities:
+- [x] Stabilization priorities:
 
   - [x] treat `cargo check --workspace --all-targets` as a required warning
     gate alongside `cargo test`, so production and test-target warnings do not
@@ -20,7 +20,7 @@ drift.
   - [x] reconcile optimistic path rename indexing with the eventual client or
     file-system outcome.
 
-- [ ] `textDocument/documentSymbol`
+- [x] `textDocument/documentSymbol`
 
   - [x] headings
   - [x] explicit anchors
@@ -161,34 +161,44 @@ Current `djot-notes` usage and query context are documented in
   - [x] `djot-core`: split task model, task edit planning, recurrence, and
     task attribute helpers out of `tasks.rs` if task CLI/editor actions keep
     growing.
+  - [ ] `djot-ls`: keep splitting `server.rs` by capability or workflow if
+    request/notification orchestration keeps growing.
+  - [ ] `djot-core`: split narrower analysis helpers out of `analysis.rs` once
+    task, metadata, or native-list parsing needs another behavioral change.
+  - [ ] `djot-notes`: move remaining command dispatch and test-heavy helpers
+    out of `main.rs` if new task actions or output modes add more branches.
 
-- [ ] Add a lossless source-map layer for edit-sensitive Djot syntax. Concrete
+- [x] Add a source-map/CST foundation for edit-sensitive Djot syntax. Concrete
   architecture and staged delivery (Slices 1--4) live in
-  [cst-refactor](cst-refactor.dj); the points below are the original sketch.
+  [cst-refactor](cst-refactor.dj).
 
-  - Keep jotdown as the structural Djot parser for now, but make its event
+  - [x] Keep jotdown as the structural Djot parser for now, but make its event
     stream an implementation detail behind `djot-core` analysis APIs.
-  - Centralize the hand-written source scans that recover exact byte ranges for
-    attribute ids/values, link destination subranges, task fences, list context,
-    and incomplete completion syntax.
-  - Store explicit source ranges for semantic fields that LSP and CLI edits
+  - [x] Centralize the hand-written source scans that recover exact byte ranges
+    for attribute ids/values, link destination subranges, task fences, and
+    closed-link syntax.
+  - [x] Store explicit source ranges for semantic fields that LSP and CLI edits
     need, such as anchor ids, task metadata attributes, dependency tokens,
     link paths, and link fragments.
-  - Prefer replacing ad hoc `find`-style range recovery with a small
+  - [x] Prefer replacing ad hoc `find`-style range recovery with a small
     source-map model that maps parsed semantic values back to their original
     source tokens.
-  - Revisit a jotdown fork or replacement only if the source-map layer keeps
+  - [x] Revisit a jotdown fork or replacement only if the source-map layer keeps
     depending on parser internals that jotdown cannot expose cleanly.
-  - [ ] First slice: fix task fence/attribute mislocation as the seed of this
-    layer. `task_opening_fence` recovers the opening fence by re-scanning text
-    and string-matching the literal `::: task`, so a nested `:::: task` (4+
-    colons) is skipped and the edit lands on the wrong fence: completing an
-    unfinished outer task whose cursor sits inside an already-done nested task
-    writes a redundant `done` onto the nested task and never marks the outer
-    one. Store the fence span and attribute insertion point on `Task` from the
-    `Container::Div` start span in `analysis.rs`, drop `task_opening_fence` and
-    its colon/`- ` special cases, and cover the nested-fence regression with a
-    `djot-core` task-editing test.
+  - [x] Fix task fence/attribute mislocation by storing the fence span and
+    attribute insertion point on `Task` from the div's own CST span. The
+    nested-fence regression is covered by a `djot-core` task-editing test.
+  - [x] Route attribute id/value ranges and link destination subranges through
+    CST helpers instead of whole-source string searches.
+  - [x] Invert control so `cst::parse` owns the jotdown walk and `analysis.rs`
+    consumes a parser-agnostic event stream.
+
+- [ ] Extend the CST layer only where later features need it:
+
+  - [ ] Consider moving completion's incomplete-link parser into CST if more
+    error-tolerant edit-time syntax features appear.
+  - [ ] Consider a standalone `djot-syntax` crate if another workspace crate
+    needs direct access to parser-agnostic syntax events.
 
 - [ ] Defer disk-backed analysis caching until parsing shows up as a real
   bottleneck. If added, keep the cache limited to saved on-disk files and let
