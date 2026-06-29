@@ -98,17 +98,12 @@ the integrated commits.
 
 Version selection:
 
-- Release `0.<x+1>.0` from the current `main` development line when the release
-  includes the accumulated post-`0.x.y` work on `main`, such as features,
-  behavior changes, or roadmap work. For example, after `0.21.0` has been
-  released and `main` is at `0.22.0-dev`, releasing the current mainline means
-  releasing `0.22.0`.
-- Release `0.x.<y+1>` when the user asks for a fix-only release for the latest
-  released minor line, or when the release should contain only selected fixes
-  on top of the latest `0.x.y` tag. In that case, create a release branch from
-  the latest release tag, cherry-pick only the intended fix commits, bump the
-  version to the next patch version, and tag that patch release. Do not turn an
-  unrelated `0.<x+1>.0-dev` mainline into the patch release.
+- Release `0.x.<y+1>` when the release contains only fixes relative to the
+  latest `0.x.y` release.
+- Otherwise, release `0.<x+1>.y` when the release includes non-fix work such as
+  features, behavior changes, or roadmap work.
+- Do not create a separate release branch just to choose a patch or minor
+  version; choose the version from the contents being released.
 
 When asked to release a version, use this sequence:
 
