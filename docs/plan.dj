@@ -252,15 +252,15 @@ support.
 - [ ] Add CLI actions for completing, reopening, and recurring tasks:
 
   - [x] Support direct task targets such as `path/to/file.dj#task-id` for
-    `djot-notes task done`.
-  - [x] Add an explicit action for marking a task done.
-  - [x] Have `done` advance recurring tasks by appending the next open
+    `djot-notes task complete`.
+  - [x] Add an explicit action for marking a task complete.
+  - [x] Have `complete` advance recurring tasks by appending the next open
     instance.
   - [ ] Add a direct action for removing `done`.
-  - [ ] Add a direct action for canceling tasks.
+  - [x] Add a direct action for canceling tasks (`djot-notes task cancel`).
   - [ ] Add a direct action for reopening completed or canceled tasks.
-  - [ ] Reuse the same core task editing semantics as the LSP code actions so
-    CLI and editor behavior stay consistent.
+  - [x] Reuse the same core task editing semantics as the LSP code actions so
+    CLI and editor behavior stay consistent (`task_status_edits_by_id`).
   - Consider batch and interactive forms after the direct action exists, such as
     applying an action to `djot-notes task --query ...` results or selected
     skim items.

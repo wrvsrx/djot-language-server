@@ -121,13 +121,16 @@ CEL timestamps, so time comparisons work across timezone offsets:
 djot-notes task --query 'actionable'
 djot-notes task --query 'blocked'
 djot-notes task --flat
-djot-notes task done notes/tasks.dj#write-parser
+djot-notes task complete notes/tasks.dj#write-parser
+djot-notes task cancel notes/tasks.dj#write-parser
 ```
 
-`task done` marks explicit task targets done in-place. Targets use the same
-root-relative `path.dj#task-id` spelling printed in task output. Recurring tasks
-advance by default: completing a task with `due` and `recur` appends the next
-instance and points its `prev` at the completed task.
+`task complete` and `task cancel` mark explicit task targets done or canceled
+in-place, matching the language server’s “Complete task” and “Cancel task” code
+actions. Targets use the same root-relative `path.dj#task-id` spelling printed
+in task output. Recurring tasks advance by default: completing a task with `due`
+and `recur` appends the next instance and points its `prev` at the completed
+task.
 
 ## Bundled Codex skills
 
